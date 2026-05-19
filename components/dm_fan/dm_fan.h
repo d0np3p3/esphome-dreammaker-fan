@@ -176,7 +176,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
       this->state = (state_.power == 1);
       this->speed = state_.speed;
       this->oscillating = (state_.oscillation == 1);
-      // --- FIX: Presets in 2026.x erfordern den Setter ---
+      // --- FIX: Presets in 2026.x erfordern den neuen internen Setter ---
       this->set_preset_mode_(mode_name_(state_.mode)); 
       this->publish_state();
     }
