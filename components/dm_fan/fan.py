@@ -11,13 +11,16 @@ from esphome.const import (
 )
 from . import dm_fan_ns
 
+# --- FEHLENDE ZEILEN EINGEFÜGT ---
+DEPENDENCIES = ["uart"]
+AUTO_LOAD = ["sensor"]
+
 DmFan = dm_fan_ns.class_("DmFan", fan.Fan, cg.Component, uart.UARTDevice)
 
 CONF_UART_ID = "uart_id"
 CONF_TEMPERATURE = "temperature"
 CONF_HUMIDITY = "humidity"
 
-# ÄNDERUNG HIER: Nutzen der modernen fan.fan_schema()-Funktion anstelle der gelöschten Variable
 CONFIG_SCHEMA = fan.fan_schema(DmFan).extend({
     cv.Required(CONF_UART_ID): cv.use_id(uart.UARTComponent),
     cv.Optional(CONF_TEMPERATURE): sensor.sensor_schema(
