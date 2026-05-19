@@ -20,6 +20,7 @@ To use this as an `external_component`, ensure your repository directory matches
 ```text
 esphome-dreammaker-fan/
 ├── README.md
+├── LICENSE
 ├── dm_fan.yaml            # Example configuration for your ESP32 device
 └── components/
     └── dm_fan/
