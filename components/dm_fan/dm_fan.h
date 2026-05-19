@@ -40,7 +40,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
  public:
   void setup() override {
     ESP_LOGI(TAG, "DM Fan (Ultra Stable Final) ready!");
-    // --- FIX: Presets werden im ESPHome 2026.x Standard direkt der Entity zugewiesen ---
+    // Presets im Setup setzen (ESPHome 2026.x Standard)
     this->set_supported_preset_modes({"direct", "natural", "smart"});
   }
 
@@ -48,7 +48,6 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     auto traits = fan::FanTraits();
     traits.set_oscillation(true);
     traits.set_supported_speed_count(100);
-    // Presets wurden hier entfernt, da sie nun in setup() liegen
     return traits;
   }
 
@@ -81,7 +80,6 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
       changed = true;
     }
     
-    // --- FIX: Sicherer String-Abgleich für ESPHome 2026.x API ---
     if (call.has_preset_mode()) {
       const char *mode_c = call.get_preset_mode();
       if (mode_c != nullptr) {
@@ -96,6 +94,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     if (changed) send_state_();
   }
 
+  // --- EXTERNE FEATURES ---
   void set_child_lock(bool v) { state_.child_lock = v ? 1 : 0; send_state_(); }
   void set_lights(bool v)     { state_.lights = v ? 1 : 0; send_state_(); }
   void set_sounds(bool v)     { state_.sounds = v ? 1 : 0; send_state_(); }
@@ -108,6 +107,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     }
   }
 
+  // --- GETTER FÜR DAS YAML-FEEDBACK ---
   bool get_child_lock() { return state_.child_lock == 1; }
   bool get_lights()     { return state_.lights == 1; }
   bool get_sounds()     { return state_.sounds == 1; }
@@ -176,7 +176,6 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
       this->state = (state_.power == 1);
       this->speed = state_.speed;
       this->oscillating = (state_.oscillation == 1);
-      // --- FIX: Presets in 2026.x erfordern den neuen internen Setter ---
       this->set_preset_mode_(mode_name_(state_.mode)); 
       this->publish_state();
     }
