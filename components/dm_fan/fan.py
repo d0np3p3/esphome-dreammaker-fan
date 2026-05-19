@@ -11,7 +11,7 @@ from esphome.const import (
 )
 from . import dm_fan_ns
 
-# --- FEHLENDE ZEILEN EINGEFÜGT ---
+# --- LÖSUNG FÜR DEN SENSOR.H FEHLER ---
 DEPENDENCIES = ["uart"]
 AUTO_LOAD = ["sensor"]
 
@@ -44,7 +44,6 @@ async def to_code(config):
     await uart.register_uart_device(var, config)
     await fan.register_fan(var, config)
 
-    # ---------------- SENSORS BINDING ----------------
     if t := config.get(CONF_TEMPERATURE):
         s = await sensor.new_sensor(t)
         cg.add(var.set_temperature_sensor(s))
