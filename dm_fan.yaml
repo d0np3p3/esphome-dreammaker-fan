@@ -1,0 +1,61 @@
+external_components:
+  - source:
+      type: git
+      url: https://github.com/d0np3p3/esphome-dreammaker-fan
+    components: [ dm_fan ]
+
+uart:
+  id: uart_bus
+  tx_pin: GPIO17
+  rx_pin: GPIO16
+  baud_rate: 9600
+
+fan:
+  - platform: dm_fan
+    id: my_fan
+    name: "DM Fan"
+    uart_id: uart_bus
+    temperature:
+      name: "Temperatur"
+    humidity:
+      name: "Luftfeuchtigkeit"
+
+switch:
+  - platform: template
+    name: "Kindersicherung"
+    icon: "mdi:baby-carriage"
+    lambda: |-
+      return id(my_fan).get_child_lock();
+    turn_on_action:
+      - lambda: 'id(my_fan).set_child_lock(true);'
+    turn_off_action:
+      - lambda: 'id(my_fan).set_child_lock(false);'
+
+  - platform: template
+    name: "LED Anzeige"
+    icon: "mdi:led-on"
+    lambda: |-
+      return id(my_fan).get_lights();
+    turn_on_action:
+      - lambda: 'id(my_fan).set_lights(true);'
+    turn_off_action:
+      - lambda: 'id(my_fan).set_lights(false);'
+
+  - platform: template
+    name: "Tastentöne"
+    icon: "mdi:volume-high"
+    lambda: |-
+      return id(my_fan).get_sounds();
+    turn_on_action:
+      - lambda: 'id(my_fan).set_sounds(true);'
+    turn_off_action:
+      - lambda: 'id(my_fan).set_sounds(false);'
+
+number:
+  - platform: template
+    name: "Timer (Stunden)"
+    min_value: 0
+    max_value: 4
+    step: 1
+    set_action:
+      - lambda: 'id(my_fan).set_timer(x);'
