@@ -1,3 +1,43 @@
+esphome:
+  name: dreammaker-fan
+  friendly_name: Dream Maker Fan
+  comment: "Zeico / Dream Maker Smart Fan"
+  project:
+    name: "d0np3p3.esphome-dreammaker-fan"
+    version: "1.0.0"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+    sdkconfig_options:
+      CONFIG_FREERTOS_UNICORE: y
+    advanced:
+      ignore_efuse_custom_mac: true
+      ignore_efuse_mac_crc: true
+
+logger:
+  level: DEBUG
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "Dreammaker-Fan Hotspot"
+    password: !secret wifi_ap_password
+
+captive_portal:
+
+# --- Ab hier beginnt die eigentliche Fan-Integration ---
+
 external_components:
   - source:
       type: git
@@ -10,6 +50,7 @@ uart:
   rx_pin: GPIO16
   baud_rate: 9600
 
+# 1. Core Hub & Native Fan Entity
 fan:
   - platform: dm_fan
     id: my_fan
@@ -20,6 +61,7 @@ fan:
     humidity:
       name: "Luftfeuchtigkeit"
 
+# 2. Extensible Hardware Switches mit Live State Feedback (Hardware Sync)
 switch:
   - platform: template
     name: "Kindersicherung"
@@ -51,6 +93,7 @@ switch:
     turn_off_action:
       - lambda: 'id(my_fan).set_sounds(false);'
 
+# 3. Off-Core Core Hardware Timer Control
 number:
   - platform: template
     name: "Timer (Stunden)"
