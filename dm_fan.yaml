@@ -1,3 +1,4 @@
+# dm_fan.yaml - Final für dein Repository
 esphome:
   name: dreammaker-fan
   friendly_name: Dream Maker Fan
@@ -36,8 +37,6 @@ wifi:
 
 captive_portal:
 
-# --- Ab hier beginnt die eigentliche Fan-Integration ---
-
 external_components:
   - source:
       type: git
@@ -50,7 +49,6 @@ uart:
   rx_pin: GPIO16
   baud_rate: 9600
 
-# 1. Core Hub & Native Fan Entity
 fan:
   - platform: dm_fan
     id: my_fan
@@ -60,8 +58,10 @@ fan:
       name: "Temperatur"
     humidity:
       name: "Luftfeuchtigkeit"
+    # Optional für spätere Erweiterung:
+    # oscillation_angle:
+    #   name: "Oszillations-Winkel"
 
-# 2. Extensible Hardware Switches mit Live State Feedback (Hardware Sync)
 switch:
   - platform: template
     name: "Kindersicherung"
@@ -93,12 +93,11 @@ switch:
     turn_off_action:
       - lambda: 'id(my_fan).set_sounds(false);'
 
-# 3. Off-Core Core Hardware Timer Control
 number:
   - platform: template
     name: "Timer (Stunden)"
     min_value: 0
     max_value: 4
-    step: 1
+    step: 0.5  # Jetzt korrekt auf halbe Stunden eingestellt
     set_action:
       - lambda: 'id(my_fan).set_timer(x);'
