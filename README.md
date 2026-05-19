@@ -29,6 +29,36 @@ esphome-dreammaker-fan/
         └── fan.py         # Empty placeholder required by ESPHome component architecture
 
 ```
+## ⚡ Hardware Flashing Guide [TBC]
+
+> **⚠️ TO BE CONFIRMED (TBC):** The following flashing instructions are based on community findings and hardware teardowns (see [Issue #50](https://github.com/dhewg/esphome-miot/issues/50)). They have not yet been independently verified for this specific ESPHome implementation. Proceed with caution!
+
+### 1. ⚠️ Stop the ESP32 Reboot Loop (Halt the MCU)
+Users have reported that the ESP32 constantly reboots when attempting to read/write via serial. This is caused by the main MCU interfering with the ESP32's boot process. You must halt the MCU during the backup and flashing process:
+* Locate the 5-pin header marked **`J3`** right next to the **ROHS** logo on the fan's PCB.
+* Find the **Reset** and **GND** pins on this header.
+* **Short the Reset pin to GND** using a jumper wire. Keep it shorted the entire time you are backing up or flashing the ESP32!
+
+### 2. ESP32 Hardware Connection
+You do not need to solder directly to the ESP32 chip's tiny pins for the initial flash.
+* Locate the exposed solder pads on the bottom left of the circuit board.
+* They are conveniently labeled as `TX`, `RX`, and `GND`.
+* Connect a **3.3V USB-to-TTL Serial Adapter** to these pads:
+  * Adapter `RX` ➔ Board `TX`
+  * Adapter `TX` ➔ Board `RX`
+  * Adapter `GND` ➔ Board `GND`
+
+*(Note: While the ESP32 uses `GPIO16` and `GPIO17` internally to talk to the fan's MCU, the exposed `TX`/`RX` pads are meant for the standard hardware serial bootloader.)*
+
+### 3. Backup the Original Firmware
+Before flashing ESPHome, it is highly recommended to create a full dump of the original Tuya/DM-Maker firmware using `esptool.py`. Do not proceed to flash ESPHome unless you have successfully verified the backup bin file!
+
+### 4. Flashing ESPHome
+1. Ensure the MCU is still shorted to GND (Step 1).
+2. Put the ESP32 into bootloader mode (usually by pulling `GPIO0` to `GND` while booting).
+3. Flash your compiled `dm_fan.bin` via the serial adapter.
+4. Once the initial serial flash is successful, remove all jumper wires. All future updates can be done comfortably Over-The-Air (OTA) via Home Assistant/ESPHome.
+
 
 ## 📦 How to Integrate
 
