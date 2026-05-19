@@ -1,4 +1,3 @@
-```markdown
 # ESPHome Zeico / Dream Maker Fan Integration
 
 Experimental, cloud-free, ultra-stable native ESPHome integration for Zeico / Dream Maker smart fans. Replaces stock Tuya firmware to enable local control of power, speed (1-100%), oscillation, and presets via a wired MCU-UART connection (9600 baud).
@@ -78,7 +77,7 @@ Anyone can easily pull the component directly into their ESPHome configuration v
 external_components:
   - source:
       type: git
-      url: [https://github.com/d0np3p3/esphome-dreammaker-fan](https://github.com/d0np3p3/esphome-dreammaker-fan)
+      url: https://github.com/d0np3p3/esphome-dreammaker-fan
     components: [ dm_fan ]
 
 uart:
@@ -158,4 +157,4 @@ This project was a collaborative reverse-engineering effort and builds upon the 
 * **Claude (Claude AI)**: Heavy lifting on the deep protocol analysis, Tuya BLE Beacon XXTEA encryption discovery, and UART payload mapping.
 * **Gemini (Google AI)**: ESPHome 2026.x `external_component` architecture design, production-grade template entity refactoring, and state-diffing integration.
 * **[klada/dmiot2mqtt](https://github.com/klada/dmiot2mqtt)** & **[rapajim/dmiot2mqtt](https://github.com/rapajim/dmiot2mqtt)**: For their foundational work on decoding the proprietary Dream Maker / Zeico MCU protocols.
-* **BobeOlsen on [dhewg/esphome-miot (Issue #50)**](https://github.com/dhewg/esphome-miot/issues/50): For the initial inspiration and hardware discussions that paved the way!
+* **BobeOlsen on [dhewg/esphome-miot (Issue #50)](https://github.com/dhewg/esphome-miot/issues/50): For the initial inspiration and hardware discussions that paved the way!
