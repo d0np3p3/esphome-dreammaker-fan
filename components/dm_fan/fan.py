@@ -17,8 +17,8 @@ CONF_UART_ID = "uart_id"
 CONF_TEMPERATURE = "temperature"
 CONF_HUMIDITY = "humidity"
 
-CONFIG_SCHEMA = fan.FAN_SCHEMA.extend({
-    cv.GenerateID(CONF_ID): cv.declare_id(DmFan),
+# ÄNDERUNG HIER: Nutzen der modernen fan.fan_schema()-Funktion anstelle der gelöschten Variable
+CONFIG_SCHEMA = fan.fan_schema(DmFan).extend({
     cv.Required(CONF_UART_ID): cv.use_id(uart.UARTComponent),
     cv.Optional(CONF_TEMPERATURE): sensor.sensor_schema(
         unit_of_measurement=UNIT_CELSIUS,
