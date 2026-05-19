@@ -6,6 +6,7 @@
 #include "esphome/components/fan/fan.h"
 #include "esphome/components/sensor/sensor.h"
 #include <algorithm>
+#include <string>
 
 namespace esphome {
 namespace dm_fan {
@@ -39,13 +40,15 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
  public:
   void setup() override {
     ESP_LOGI(TAG, "DM Fan (Ultra Stable Final) ready!");
+    // --- FIX: Presets werden im ESPHome 2026.x Standard direkt der Entity zugewiesen ---
+    this->set_supported_preset_modes({"direct", "natural", "smart"});
   }
 
   fan::FanTraits get_traits() override {
     auto traits = fan::FanTraits();
     traits.set_oscillation(true);
     traits.set_supported_speed_count(100);
-    traits.set_supported_preset_modes({"direct", "natural", "smart"});
+    // Presets wurden hier entfernt, da sie nun in setup() liegen
     return traits;
   }
 
@@ -77,18 +80,22 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
       state_.oscillation = *call.get_oscillating() ? 1 : 0;
       changed = true;
     }
-    if (call.get_preset_mode().has_value()) {
-      auto mode = *call.get_preset_mode();
-      if (mode == "natural") state_.mode = 1;
-      else if (mode == "smart") state_.mode = 2;
-      else state_.mode = 0;
-      changed = true;
+    
+    // --- FIX: Sicherer String-Abgleich für ESPHome 2026.x API ---
+    if (call.has_preset_mode()) {
+      const char *mode_c = call.get_preset_mode();
+      if (mode_c != nullptr) {
+        std::string mode(mode_c);
+        if (mode == "natural") state_.mode = 1;
+        else if (mode == "smart") state_.mode = 2;
+        else state_.mode = 0;
+        changed = true;
+      }
     }
 
     if (changed) send_state_();
   }
 
-  // --- EXTERNE FEATURES (Von YAML aufgerufen) ---
   void set_child_lock(bool v) { state_.child_lock = v ? 1 : 0; send_state_(); }
   void set_lights(bool v)     { state_.lights = v ? 1 : 0; send_state_(); }
   void set_sounds(bool v)     { state_.sounds = v ? 1 : 0; send_state_(); }
@@ -101,7 +108,6 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     }
   }
 
-  // --- GETTER FÜR DAS YAML-FEEDBACK (Hardware-Tasten Sync) ---
   bool get_child_lock() { return state_.child_lock == 1; }
   bool get_lights()     { return state_.lights == 1; }
   bool get_sounds()     { return state_.sounds == 1; }
@@ -170,7 +176,8 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
       this->state = (state_.power == 1);
       this->speed = state_.speed;
       this->oscillating = (state_.oscillation == 1);
-      this->preset_mode = mode_name_(state_.mode);
+      // --- FIX: Presets in 2026.x erfordern den Setter ---
+      this->set_preset_mode_(mode_name_(state_.mode)); 
       this->publish_state();
     }
 
