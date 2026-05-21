@@ -1,24 +1,31 @@
-# dm_fan.yaml - Final für dein Repository
+# DM Fan ESPHome Configuration
+# v2.1 — Added rotate_left/rotate_right (RES=0x05)
+# Changelog:
+#   v1.0 — Initial UART implementation (full state frame, unconfirmed)
+#   v2.0 — Single-property CMD=0x04 TX protocol, IEEE754 temp/hum,
+#           timer 0-8h uint16 BE, confirmed byte offsets from image table,
+#           millis-rollover fix, rx:: namespace offsets
+#   v2.1 — rotate_left/rotate_right (Property 0x05, 0x01=left 0x02=right)
+
+substitutions:
+  device_name: dreammaker-fan
+  friendly_name: "Dream Maker Fan"
+
 esphome:
-  name: dreammaker-fan
-  friendly_name: Dream Maker Fan
-  comment: "Zeico / Dream Maker Smart Fan"
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  comment: "Zeico / Dream Maker Smart Fan — Native UART, no cloud"
   project:
-    name: "d0np3p3.esphome-dreammaker-fan"
-    version: "1.0.0"
+    name: "esphome-dreammaker-fan"
+    version: "2.1.0"
 
 esp32:
   board: esp32dev
   framework:
-    type: esp-idf
-    sdkconfig_options:
-      CONFIG_FREERTOS_UNICORE: y
-    advanced:
-      ignore_efuse_custom_mac: true
-      ignore_efuse_mac_crc: true
+    type: esp-idf   # Default seit ESPHome 2026.1.0
 
 logger:
-  level: DEBUG
+  level: DEBUG     # Nach erstem Test auf INFO reduzieren
 
 api:
   encryption:
@@ -32,72 +39,117 @@ wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
   ap:
-    ssid: "Dreammaker-Fan Hotspot"
+    ssid: "${device_name} Fallback"
     password: !secret wifi_ap_password
 
 captive_portal:
 
+# ── Externe Komponente ────────────────────────────────────────────────────────
 external_components:
+  # Option A: Lokal (Dateien liegen neben dieser YAML)
   - source:
-      type: git
-      url: https://github.com/d0np3p3/esphome-dreammaker-fan
-    components: [ dm_fan ]
+      type: local
+      path: components
+    components: [dm_fan]
+  # Option B: Via GitHub (nach Push aktivieren, Option A auskommentieren)
+  # - source:
+  #     type: git
+  #     url: https://github.com/d0np3p3/esphome-dreammaker-fan
+  #     ref: main
+  #   components: [dm_fan]
 
+# ── UART zur Fan-MCU ──────────────────────────────────────────────────────────
 uart:
   id: uart_bus
-  tx_pin: GPIO17
-  rx_pin: GPIO16
+  tx_pin: GPIO17   # ESP→MCU
+  rx_pin: GPIO16   # MCU→ESP
   baud_rate: 9600
+  # Falls keine Frames ankommen → 115200 probieren
 
+# ── Lüfter ────────────────────────────────────────────────────────────────────
+# Enthält: Power, Speed 1-100%, Oscillation ON/OFF, Preset (direct/natural/smart)
 fan:
   - platform: dm_fan
     id: my_fan
     name: "DM Fan"
     uart_id: uart_bus
     temperature:
-      name: "Temperatur"
+      name: "Temperatur"          # IEEE754 float LE, bestätigt
+      entity_category: diagnostic
     humidity:
-      name: "Luftfeuchtigkeit"
-    # Optional für spätere Erweiterung:
-    # oscillation_angle:
-    #   name: "Oszillations-Winkel"
+      name: "Luftfeuchtigkeit"    # IEEE754 float LE, bestätigt
+      entity_category: diagnostic
 
+# ── Oszillationswinkel (RES=0x04, bestätigt) ─────────────────────────────────
+select:
+  - platform: template
+    name: "Oszillationswinkel"
+    icon: "mdi:angle-acute"
+    entity_category: config
+    options: ["30°", "60°", "90°", "120°", "140°"]
+    lambda: |-
+      return str_sprintf("%d°", id(my_fan)->get_roll_angle());
+    set_action:
+      lambda: |-
+        int deg = 90;
+        if (x == "30°")  deg = 30;
+        if (x == "60°")  deg = 60;
+        if (x == "90°")  deg = 90;
+        if (x == "120°") deg = 120;
+        if (x == "140°") deg = 140;
+        id(my_fan)->set_roll_angle(deg);
+
+# ── Timer 0-8h (RES=0x06, uint16 BE Minuten, bestätigt) ──────────────────────
+number:
+  - platform: template
+    name: "Timer (Stunden)"
+    icon: "mdi:timer-outline"
+    min_value: 0
+    max_value: 8
+    step: 1
+    entity_category: config
+    lambda: "return id(my_fan)->get_timer_hours();"
+    set_action:
+      lambda: "id(my_fan)->set_timer_hours(x);"
+
+# ── Schalter ──────────────────────────────────────────────────────────────────
 switch:
   - platform: template
     name: "Kindersicherung"
     icon: "mdi:baby-carriage"
-    lambda: |-
-      return id(my_fan).get_child_lock();
-    turn_on_action:
-      - lambda: 'id(my_fan).set_child_lock(true);'
-    turn_off_action:
-      - lambda: 'id(my_fan).set_child_lock(false);'
+    entity_category: config
+    lambda: "return id(my_fan)->get_child_lock();"
+    turn_on_action:  { lambda: "id(my_fan)->set_child_lock(true);" }
+    turn_off_action: { lambda: "id(my_fan)->set_child_lock(false);" }
 
   - platform: template
     name: "LED Anzeige"
     icon: "mdi:led-on"
-    lambda: |-
-      return id(my_fan).get_lights();
-    turn_on_action:
-      - lambda: 'id(my_fan).set_lights(true);'
-    turn_off_action:
-      - lambda: 'id(my_fan).set_lights(false);'
+    entity_category: config
+    lambda: "return id(my_fan)->get_led();"
+    turn_on_action:  { lambda: "id(my_fan)->set_led(true);" }
+    turn_off_action: { lambda: "id(my_fan)->set_led(false);" }
 
   - platform: template
     name: "Tastentöne"
     icon: "mdi:volume-high"
-    lambda: |-
-      return id(my_fan).get_sounds();
-    turn_on_action:
-      - lambda: 'id(my_fan).set_sounds(true);'
-    turn_off_action:
-      - lambda: 'id(my_fan).set_sounds(false);'
+    entity_category: config
+    lambda: "return id(my_fan)->get_sound();"
+    turn_on_action:  { lambda: "id(my_fan)->set_sound(true);" }
+    turn_off_action: { lambda: "id(my_fan)->set_sound(false);" }
 
-number:
+# ── Manuelles Rotieren (RES=0x05, nur wenn Oszillation AUS) ──────────────────
+button:
   - platform: template
-    name: "Timer (Stunden)"
-    min_value: 0
-    max_value: 4
-    step: 0.5  # Jetzt korrekt auf halbe Stunden eingestellt
-    set_action:
-      - lambda: 'id(my_fan).set_timer(x);'
+    name: "Nach Links drehen"
+    icon: "mdi:arrow-left-bold"
+    entity_category: config
+    on_press:
+      lambda: "id(my_fan)->rotate_left();"
+
+  - platform: template
+    name: "Nach Rechts drehen"
+    icon: "mdi:arrow-right-bold"
+    entity_category: config
+    on_press:
+      lambda: "id(my_fan)->rotate_right();"
