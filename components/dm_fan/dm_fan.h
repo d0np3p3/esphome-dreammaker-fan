@@ -14,6 +14,7 @@ namespace dm_fan {
 static const char *const TAG = "dm_fan.v2.1";
 
 // ── Protocol constants ────────────────────────────────────────────────────────
+// FA CE magic also in BLE provisioning finish: FA CE AA 00
 constexpr uint8_t MAGIC_0   = 0xFA;
 constexpr uint8_t MAGIC_1   = 0xCE;
 constexpr uint8_t CMD_STATE = 0x84;  // MCU→ESP full state push (RX)
@@ -26,13 +27,13 @@ constexpr uint8_t RES_SPEED     = 0x01;
 constexpr uint8_t RES_MODE      = 0x02;
 constexpr uint8_t RES_OSC_ONOFF = 0x03;
 constexpr uint8_t RES_OSC_ANGLE = 0x04;
-constexpr uint8_t RES_ROTATE    = 0x05;  // Manual rotate: 0x01=left 0x02=right (osc OFF only, UNCONFIRMED)
-constexpr uint8_t RES_TIMER     = 0x06;  // uint16 BE minutes, 0-480 (8h)
+constexpr uint8_t RES_ROTATE    = 0x05;  // 0x01=left 0x02=right (osc OFF, UNCONFIRMED)
+constexpr uint8_t RES_TIMER     = 0x06;  // uint16 BE minutes 0-480 (8h)
 constexpr uint8_t RES_SOUND     = 0x07;
 constexpr uint8_t RES_LED       = 0x08;
 constexpr uint8_t RES_CHILDLOCK = 0x09;
 
-// WiFi keepalive response — resource 0x70 paired with query 0x78 (from firmware binary)
+// WiFi keepalive — resource 0x70 paired with query 0x78 (from firmware binary)
 // Without this the MCU reboots the ESP every 5-10 min
 static const uint8_t WIFI_RESPONSE[14] = {
   0xFA, 0xCE, 0x00, 0x09, 0x81, 0x00, 0x70,
@@ -44,21 +45,21 @@ static const uint8_t WIFI_RESPONSE[14] = {
 // frame byte N → parse_buf_[N - 4]
 // All confirmed from UART captures + image table
 namespace rx {
-  constexpr uint8_t POWER      = 18;  // frame[22]
+  constexpr uint8_t POWER      = 18;  // frame[22]  0=OFF 1=ON
   constexpr uint8_t SPEED      = 19;  // frame[23]  1-100%
-  constexpr uint8_t MODE       = 20;  // frame[24]  0/1/2
-  constexpr uint8_t OSC        = 21;  // frame[25]
+  constexpr uint8_t MODE       = 20;  // frame[24]  0=direct 1=natural 2=smart
+  constexpr uint8_t OSC        = 21;  // frame[25]  0=OFF 1=ON
   constexpr uint8_t ANGLE      = 22;  // frame[26]  0x1E/3C/5A/78/8C
-  constexpr uint8_t TIMER_H    = 23;  // frame[27]  uint16 BE high
-  constexpr uint8_t TIMER_L    = 24;  // frame[28]  uint16 BE low
-  constexpr uint8_t SOUND      = 25;  // frame[29]
-  constexpr uint8_t LED        = 26;  // frame[30]
-  constexpr uint8_t CHILD_LOCK = 27;  // frame[31]
-  constexpr uint8_t TEMP_B0    = 28;  // frame[32]  IEEE754 float LE
+  constexpr uint8_t TIMER_H    = 23;  // frame[27]  uint16 BE high byte
+  constexpr uint8_t TIMER_L    = 24;  // frame[28]  uint16 BE low byte
+  constexpr uint8_t SOUND      = 25;  // frame[29]  confirmed
+  constexpr uint8_t LED        = 26;  // frame[30]  confirmed
+  constexpr uint8_t CHILD_LOCK = 27;  // frame[31]  confirmed
+  constexpr uint8_t TEMP_B0    = 28;  // frame[32]  IEEE754 float LE e.g. 00 00 C4 41 = 24.5°C
   constexpr uint8_t TEMP_B1    = 29;  // frame[33]
   constexpr uint8_t TEMP_B2    = 30;  // frame[34]
   constexpr uint8_t TEMP_B3    = 31;  // frame[35]
-  constexpr uint8_t HUM_B0     = 32;  // frame[36]  IEEE754 float LE
+  constexpr uint8_t HUM_B0     = 32;  // frame[36]  IEEE754 float LE e.g. 00 00 1C 42 = 39.0%
   constexpr uint8_t HUM_B1     = 33;  // frame[37]
   constexpr uint8_t HUM_B2     = 34;  // frame[38]
   constexpr uint8_t HUM_B3     = 35;  // frame[39]
@@ -90,7 +91,7 @@ struct FanState {
   uint8_t  mode        = 0;     // 0=direct 1=natural 2=smart
   bool     oscillation = false;
   uint8_t  roll_angle  = 0x5A;  // default 90°
-  uint16_t timer_min   = 0;
+  uint16_t timer_min   = 0;     // 0-480 min
   bool     sound       = true;
   bool     led         = true;
   bool     child_lock  = false;
@@ -113,10 +114,8 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   // ── Lifecycle ────────────────────────────────────────────────────────────
   void setup() override {
     ESP_LOGI(TAG, "DM Fan v2.1 ready — TX=GPIO17 RX=GPIO16 9600 baud");
-    // Mode is handled as a separate Select entity in YAML
-    // this->set_supported_preset_modes() intentionally not called
+    // Mode handled as separate Select entity — no preset_modes on Fan
     auto restore = this->restore_state_();
-    // FIX: apply() takes Fan& not Fan*
     if (restore.has_value()) restore->apply(*this);
   }
 
@@ -124,8 +123,6 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     fan::FanTraits t;
     t.set_oscillation(true);
     t.set_supported_speed_count(100);
-    // NOTE: set_supported_preset_modes removed from FanTraits in ESPHome 2026.x
-    // Preset modes are set in setup() on the Fan entity instead
     return t;
   }
 
@@ -137,10 +134,9 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     }
   }
 
-  // ── HA → MCU: fan::Fan control ───────────────────────────────────────────
+  // ── HA → MCU: fan::Fan control (power / speed / oscillation) ─────────────
   void control(const fan::FanCall &call) override {
     last_control_time_ = millis();
-
     if (call.get_state().has_value()) {
       desired_.power = *call.get_state();
       send_cmd_bool_(RES_POWER, desired_.power);
@@ -153,10 +149,9 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
       desired_.oscillation = *call.get_oscillating();
       send_cmd_bool_(RES_OSC_ONOFF, desired_.oscillation);
     }
-    // Mode is handled via set_mode() from the separate Select entity
   }
 
-  // ── Extra controls ────────────────────────────────────────────────────────
+  // ── Public API — callable from YAML lambdas ───────────────────────────────
   void set_mode(uint8_t mode) {
     if (mode > 2) return;
     desired_.mode = mode;
@@ -173,16 +168,15 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     desired_.timer_min = (uint16_t)(std::max(0.0f, std::min(8.0f, h)) * 60.0f);
     send_cmd_uint16_(RES_TIMER, desired_.timer_min);
   }
-  // UNCONFIRMED — needs hardware test (oscillation must be OFF)
-  void rotate_left()  { send_cmd_byte_(RES_ROTATE, 0x01); }
-  void rotate_right() { send_cmd_byte_(RES_ROTATE, 0x02); }
+  void rotate_left()  { send_cmd_byte_(RES_ROTATE, 0x01); }  // UNCONFIRMED
+  void rotate_right() { send_cmd_byte_(RES_ROTATE, 0x02); }  // UNCONFIRMED
 
-  int   get_roll_angle()  const { return byte_to_angle(desired_.roll_angle); }
-  uint8_t get_mode()      const { return desired_.mode; }
-  bool  get_sound()       const { return desired_.sound; }
-  bool  get_led()         const { return desired_.led; }
-  bool  get_child_lock()  const { return desired_.child_lock; }
-  float get_timer_hours() const { return desired_.timer_min / 60.0f; }
+  uint8_t  get_mode()        const { return desired_.mode; }
+  int      get_roll_angle()  const { return byte_to_angle(desired_.roll_angle); }
+  bool     get_sound()       const { return desired_.sound; }
+  bool     get_led()         const { return desired_.led; }
+  bool     get_child_lock()  const { return desired_.child_lock; }
+  float    get_timer_hours() const { return desired_.timer_min / 60.0f; }
 
  protected:
   FanState desired_;
@@ -200,7 +194,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     return "direct";
   }
 
-  // ── State machine parser ──────────────────────────────────────────────────
+  // ── State machine parser (byte-by-byte, no buffer overflow) ──────────────
   enum class ParseState { MAGIC0, MAGIC1, LEN_H, LEN_L, PAYLOAD, CHECKSUM };
   ParseState parse_st_ = ParseState::MAGIC0;
   uint8_t    parse_buf_[64]{};
@@ -307,7 +301,6 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
       this->state       = hw_state_.power;
       this->speed       = hw_state_.speed;
       this->oscillating = hw_state_.oscillation;
-      // Mode state synced via separate Select entity in YAML
       this->publish_state();
     }
   }
@@ -316,13 +309,10 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   uint32_t msg_counter_ = 0;
 
   void build_cmd_header_(uint8_t *f, uint8_t payload_len) {
-    f[0]  = MAGIC_0;
-    f[1]  = MAGIC_1;
-    f[2]  = 0x00;
-    f[3]  = payload_len;
+    f[0]  = MAGIC_0; f[1]  = MAGIC_1;
+    f[2]  = 0x00;    f[3]  = payload_len;
     f[4]  = CMD_SET;
-    f[5]  = 0x23;
-    f[6]  = 0x47;
+    f[5]  = 0x23;    f[6]  = 0x47;
     f[7]  = (msg_counter_ >> 24) & 0xFF;
     f[8]  = (msg_counter_ >> 16) & 0xFF;
     f[9]  = (msg_counter_ >>  8) & 0xFF;
@@ -341,9 +331,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   void send_cmd_byte_(uint8_t resource, uint8_t value) {
     uint8_t f[17];
     build_cmd_header_(f, 0x0C);
-    f[12] = 0x03;
-    f[14] = resource;
-    f[15] = value;
+    f[12] = 0x03; f[14] = resource; f[15] = value;
     f[16] = checksum_(f, 16);
     write_array(f, 17);
     ESP_LOGD(TAG, "TX: res=0x%02X val=0x%02X", resource, value);
@@ -356,13 +344,12 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   void send_cmd_uint16_(uint8_t resource, uint16_t value) {
     uint8_t f[18];
     build_cmd_header_(f, 0x0D);
-    f[12] = 0x04;
-    f[14] = resource;
+    f[12] = 0x04; f[14] = resource;
     f[15] = (value >> 8) & 0xFF;
     f[16] = (value     ) & 0xFF;
     f[17] = checksum_(f, 17);
     write_array(f, 18);
-    ESP_LOGD(TAG, "TX: res=0x%02X val=%u min (uint16 BE)", resource, value);
+    ESP_LOGD(TAG, "TX: res=0x%02X val=%u min", resource, value);
   }
 };
 
