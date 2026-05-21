@@ -14,66 +14,63 @@ namespace dm_fan {
 static const char *const TAG = "dm_fan.v2.1";
 
 // ── Protocol constants ────────────────────────────────────────────────────────
-// FA CE magic also appears in BLE provisioning finish: FA CE AA 00
 constexpr uint8_t MAGIC_0   = 0xFA;
 constexpr uint8_t MAGIC_1   = 0xCE;
 constexpr uint8_t CMD_STATE = 0x84;  // MCU→ESP full state push (RX)
 constexpr uint8_t CMD_SET   = 0x04;  // ESP→MCU single-property command (TX)
 constexpr uint8_t CMD_QUERY = 0x02;  // MCU→ESP WiFi status query
 
-// Resource IDs for CMD_SET — ALL CONFIRMED from 31 TX captures
+// Resource IDs for CMD_SET — confirmed from 31 TX captures
 constexpr uint8_t RES_POWER     = 0x00;
 constexpr uint8_t RES_SPEED     = 0x01;
 constexpr uint8_t RES_MODE      = 0x02;
 constexpr uint8_t RES_OSC_ONOFF = 0x03;
 constexpr uint8_t RES_OSC_ANGLE = 0x04;
-constexpr uint8_t RES_TIMER     = 0x06;  // uint16 BE minutes, max 480 (8h)
+constexpr uint8_t RES_ROTATE    = 0x05;  // Manual rotate: 0x01=left 0x02=right (osc OFF only, UNCONFIRMED)
+constexpr uint8_t RES_TIMER     = 0x06;  // uint16 BE minutes, 0-480 (8h)
 constexpr uint8_t RES_SOUND     = 0x07;
 constexpr uint8_t RES_LED       = 0x08;
 constexpr uint8_t RES_CHILDLOCK = 0x09;
-constexpr uint8_t RES_ROTATE    = 0x05;  // Manual rotate: 0x01=left 0x02=right (osc must be OFF)
-constexpr uint8_t RES_ROTATE    = 0x05;  // Manual rotate left/right (osc must be OFF)
-                                          // 0x01=left, 0x02=right — confirmed by Gemini
 
-// WiFi response to MCU query — resource 0x70 paired with 0x78 (from firmware binary)
+// WiFi keepalive response — resource 0x70 paired with query 0x78 (from firmware binary)
 // Without this the MCU reboots the ESP every 5-10 min
 static const uint8_t WIFI_RESPONSE[14] = {
   0xFA, 0xCE, 0x00, 0x09, 0x81, 0x00, 0x70,
   0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC4
 };
 
-// ── RX frame payload offsets ──────────────────────────────────────────────────
-// parse_buf_[0] = CMD byte (= frame byte 4, after 4-byte header FA CE 00 24)
-// So: frame byte N = parse_buf_[N - 4]
-// ALL CONFIRMED from image table (UART captures verified against app display)
+// ── RX payload offsets ────────────────────────────────────────────────────────
+// parse_buf_[0] = CMD byte (frame byte 4, after 4-byte header FA CE 00 24)
+// frame byte N → parse_buf_[N - 4]
+// All confirmed from UART captures + image table
 namespace rx {
-  constexpr uint8_t POWER      = 18;  // frame[22]  0=OFF 1=ON
+  constexpr uint8_t POWER      = 18;  // frame[22]
   constexpr uint8_t SPEED      = 19;  // frame[23]  1-100%
-  constexpr uint8_t MODE       = 20;  // frame[24]  0=direct 1=natural 2=smart
-  constexpr uint8_t OSC        = 21;  // frame[25]  0=OFF 1=ON
+  constexpr uint8_t MODE       = 20;  // frame[24]  0/1/2
+  constexpr uint8_t OSC        = 21;  // frame[25]
   constexpr uint8_t ANGLE      = 22;  // frame[26]  0x1E/3C/5A/78/8C
-  constexpr uint8_t TIMER_H    = 23;  // frame[27]  uint16 BE high byte (minutes)
-  constexpr uint8_t TIMER_L    = 24;  // frame[28]  uint16 BE low byte
-  constexpr uint8_t SOUND      = 25;  // frame[29]  0=OFF 1=ON
-  constexpr uint8_t LED        = 26;  // frame[30]  0=OFF 1=ON
-  constexpr uint8_t CHILD_LOCK = 27;  // frame[31]  0=OFF 1=ON
-  constexpr uint8_t TEMP_B0    = 28;  // frame[32]  IEEE754 float LE byte 0
-  constexpr uint8_t TEMP_B1    = 29;  // frame[33]  e.g. 00 00 C4 41 = 24.5°C
+  constexpr uint8_t TIMER_H    = 23;  // frame[27]  uint16 BE high
+  constexpr uint8_t TIMER_L    = 24;  // frame[28]  uint16 BE low
+  constexpr uint8_t SOUND      = 25;  // frame[29]
+  constexpr uint8_t LED        = 26;  // frame[30]
+  constexpr uint8_t CHILD_LOCK = 27;  // frame[31]
+  constexpr uint8_t TEMP_B0    = 28;  // frame[32]  IEEE754 float LE
+  constexpr uint8_t TEMP_B1    = 29;  // frame[33]
   constexpr uint8_t TEMP_B2    = 30;  // frame[34]
   constexpr uint8_t TEMP_B3    = 31;  // frame[35]
-  constexpr uint8_t HUM_B0     = 32;  // frame[36]  IEEE754 float LE byte 0
-  constexpr uint8_t HUM_B1     = 33;  // frame[37]  e.g. 00 00 1C 42 = 39.0%
+  constexpr uint8_t HUM_B0     = 32;  // frame[36]  IEEE754 float LE
+  constexpr uint8_t HUM_B1     = 33;  // frame[37]
   constexpr uint8_t HUM_B2     = 34;  // frame[38]
   constexpr uint8_t HUM_B3     = 35;  // frame[39]
 }
 
-// ── Angle helpers — CONFIRMED ─────────────────────────────────────────────────
+// ── Angle helpers — confirmed ─────────────────────────────────────────────────
 static uint8_t angle_to_byte(int deg) {
   if (deg <= 30)  return 0x1E;
   if (deg <= 60)  return 0x3C;
   if (deg <= 90)  return 0x5A;
   if (deg <= 120) return 0x78;
-  return 0x8C;  // 140°
+  return 0x8C;
 }
 static int byte_to_angle(uint8_t b) {
   switch (b) {
@@ -89,22 +86,22 @@ static int byte_to_angle(uint8_t b) {
 // ── Internal state ────────────────────────────────────────────────────────────
 struct FanState {
   bool     power       = false;
-  uint8_t  speed       = 35;    // 1-100%
+  uint8_t  speed       = 35;
   uint8_t  mode        = 0;     // 0=direct 1=natural 2=smart
   bool     oscillation = false;
   uint8_t  roll_angle  = 0x5A;  // default 90°
-  uint16_t timer_min   = 0;     // 0-480 minutes
+  uint16_t timer_min   = 0;
   bool     sound       = true;
   bool     led         = true;
   bool     child_lock  = false;
 
-  inline bool operator==(const FanState &o) const {
+  bool operator==(const FanState &o) const {
     return power==o.power && speed==o.speed && mode==o.mode
         && oscillation==o.oscillation && roll_angle==o.roll_angle
         && timer_min==o.timer_min && sound==o.sound
         && led==o.led && child_lock==o.child_lock;
   }
-  inline bool operator!=(const FanState &o) const { return !(*this == o); }
+  bool operator!=(const FanState &o) const { return !(*this == o); }
 };
 
 // ── Main component ────────────────────────────────────────────────────────────
@@ -115,17 +112,20 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
   void setup() override {
-    ESP_LOGI(TAG, "DM Fan ready — TX=GPIO17 RX=GPIO16 9600 baud");
+    ESP_LOGI(TAG, "DM Fan v2.1 ready — TX=GPIO17 RX=GPIO16 9600 baud");
+    // FIX: set_supported_preset_modes on Fan entity (not on FanTraits)
     this->set_supported_preset_modes({"direct", "natural", "smart"});
     auto restore = this->restore_state_();
-    if (restore.has_value()) restore->apply(this);
+    // FIX: apply() takes Fan& not Fan*
+    if (restore.has_value()) restore->apply(*this);
   }
 
   fan::FanTraits get_traits() override {
     fan::FanTraits t;
     t.set_oscillation(true);
     t.set_supported_speed_count(100);
-    t.set_supported_preset_modes({"direct", "natural", "smart"});
+    // NOTE: set_supported_preset_modes removed from FanTraits in ESPHome 2026.x
+    // Preset modes are set in setup() on the Fan entity instead
     return t;
   }
 
@@ -138,10 +138,8 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   }
 
   // ── HA → MCU: fan::Fan control ───────────────────────────────────────────
-  // Each property is sent as an individual CMD_SET command (CMD=0x04)
-  // This matches the confirmed TX captures — NOT a full 42-byte state dump
   void control(const fan::FanCall &call) override {
-    last_control_time_ = millis();  // rollover-safe anti-flap
+    last_control_time_ = millis();
 
     if (call.get_state().has_value()) {
       desired_.power = *call.get_state();
@@ -155,8 +153,9 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
       desired_.oscillation = *call.get_oscillating();
       send_cmd_bool_(RES_OSC_ONOFF, desired_.oscillation);
     }
-    if (call.get_preset_mode().has_value()) {
-      const std::string &m = *call.get_preset_mode();
+    // FIX: get_preset_mode() returns const char*, not Optional<string>
+    if (call.get_preset_mode() != nullptr) {
+      std::string m(call.get_preset_mode());
       if      (m == "natural") desired_.mode = 1;
       else if (m == "smart")   desired_.mode = 2;
       else                     desired_.mode = 0;
@@ -169,48 +168,40 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     desired_.roll_angle = angle_to_byte(deg);
     send_cmd_byte_(RES_OSC_ANGLE, desired_.roll_angle);
   }
-  // Manual rotation (oscillation must be OFF)
-  // RES=0x05, 0x01=left, 0x02=right — confirmed by Gemini analysis
-  void rotate_left()  { send_cmd_byte_(RES_ROTATE, 0x01); }
-  void rotate_right() { send_cmd_byte_(RES_ROTATE, 0x02); }
-  // Manual rotate — only works when oscillation is OFF (property 0x05)
-  void rotate_left()  { send_cmd_byte_(RES_ROTATE, 0x01); }
-  void rotate_right() { send_cmd_byte_(RES_ROTATE, 0x02); }
-  void set_sound(bool v) {
-    desired_.sound = v;
-    send_cmd_bool_(RES_SOUND, v);
-  }
-  void set_led(bool v) {
-    desired_.led = v;
-    send_cmd_bool_(RES_LED, v);
-  }
-  void set_child_lock(bool v) {
-    desired_.child_lock = v;
-    send_cmd_bool_(RES_CHILDLOCK, v);
-  }
+  void set_sound(bool v)      { desired_.sound      = v; send_cmd_bool_(RES_SOUND,     v); }
+  void set_led(bool v)        { desired_.led        = v; send_cmd_bool_(RES_LED,       v); }
+  void set_child_lock(bool v) { desired_.child_lock = v; send_cmd_bool_(RES_CHILDLOCK, v); }
   void set_timer_hours(float h) {
-    // uint16 BE minutes, 0-480 (8h max) — confirmed from TX captures
-    desired_.timer_min = (uint16_t) std::max(0.0f, std::min(8.0f, h)) * 60;
+    desired_.timer_min = (uint16_t)(std::max(0.0f, std::min(8.0f, h)) * 60.0f);
     send_cmd_uint16_(RES_TIMER, desired_.timer_min);
   }
+  // UNCONFIRMED — needs hardware test (oscillation must be OFF)
+  void rotate_left()  { send_cmd_byte_(RES_ROTATE, 0x01); }
+  void rotate_right() { send_cmd_byte_(RES_ROTATE, 0x02); }
 
-  int   get_roll_angle()   const { return byte_to_angle(desired_.roll_angle); }
-  bool  get_sound()        const { return desired_.sound; }
-  bool  get_led()          const { return desired_.led; }
-  bool  get_child_lock()   const { return desired_.child_lock; }
-  float get_timer_hours()  const { return desired_.timer_min / 60.0f; }
+  int   get_roll_angle()  const { return byte_to_angle(desired_.roll_angle); }
+  bool  get_sound()       const { return desired_.sound; }
+  bool  get_led()         const { return desired_.led; }
+  bool  get_child_lock()  const { return desired_.child_lock; }
+  float get_timer_hours() const { return desired_.timer_min / 60.0f; }
 
  protected:
   FanState desired_;
   FanState hw_state_;
-  // Rollover-safe lock: millis() - last_control_time_ < 300
+  // Rollover-safe: millis() - last_control_time_ < 300
   // uint32 underflow wraps correctly — no 49-day freeze bug
   uint32_t last_control_time_ = 0;
 
   sensor::Sensor *temperature_{nullptr};
   sensor::Sensor *humidity_{nullptr};
 
-  // ── State machine parser (byte-by-byte, no buffer overflow) ──────────────
+  static const char *mode_name_(uint8_t m) {
+    if (m == 1) return "natural";
+    if (m == 2) return "smart";
+    return "direct";
+  }
+
+  // ── State machine parser ──────────────────────────────────────────────────
   enum class ParseState { MAGIC0, MAGIC1, LEN_H, LEN_L, PAYLOAD, CHECKSUM };
   ParseState parse_st_ = ParseState::MAGIC0;
   uint8_t    parse_buf_[64]{};
@@ -270,7 +261,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   }
 
   void on_state_frame_() {
-    // Anti-flap: rollover-safe 300ms window
+    // Anti-flap: rollover-safe 300ms lock
     if (millis() - last_control_time_ < 300) {
       ESP_LOGD(TAG, "Lock active, skipping HA update");
       return;
@@ -287,15 +278,14 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     n.led         = parse_buf_[rx::LED] != 0;
     n.child_lock  = parse_buf_[rx::CHILD_LOCK] != 0;
 
-    // Temperature + Humidity: IEEE754 float LE — confirmed from image table
-    // e.g. 00 00 C4 41 = 24.5°C,  00 00 1C 42 = 39.0%
+    // IEEE754 float LE — confirmed: 00 00 C4 41 = 24.5°C, 00 00 1C 42 = 39.0%
     float temp = 0.0f, hum = 0.0f;
-    if (parse_len_ >= rx::HUM_B3 + 1) {
+    if (parse_len_ > rx::HUM_B3) {
       uint8_t tb[4] = {parse_buf_[rx::TEMP_B0], parse_buf_[rx::TEMP_B1],
                        parse_buf_[rx::TEMP_B2], parse_buf_[rx::TEMP_B3]};
       memcpy(&temp, tb, 4);
-      uint8_t hb[4] = {parse_buf_[rx::HUM_B0], parse_buf_[rx::HUM_B1],
-                       parse_buf_[rx::HUM_B2], parse_buf_[rx::HUM_B3]};
+      uint8_t hb[4] = {parse_buf_[rx::HUM_B0],  parse_buf_[rx::HUM_B1],
+                       parse_buf_[rx::HUM_B2],  parse_buf_[rx::HUM_B3]};
       memcpy(&hum, hb, 4);
     }
 
@@ -314,19 +304,17 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
 
     if (n != hw_state_) {
       hw_state_ = n;
-      desired_  = hw_state_;  // sync physical button presses to desired
+      desired_  = hw_state_;
       this->state       = hw_state_.power;
       this->speed       = hw_state_.speed;
       this->oscillating = hw_state_.oscillation;
-      this->preset_mode = mode_name_(hw_state_.mode);
+      // FIX: preset_mode_ is private — use set_preset_mode_()
+      this->set_preset_mode_(mode_name_(hw_state_.mode));
       this->publish_state();
     }
   }
 
-  // ── TX frame builders — confirmed format from 31 captures ────────────────
-  // FA CE | 00 0C | 04 | 23 47 | [msg_counter 4B BE] | 00 | 03 | 00 | [res] | [val] | [chk]
-  // Timer: len=0x0D, sub_len=04, value is uint16 BE
-
+  // ── TX frame builders — confirmed from 31 captures ───────────────────────
   uint32_t msg_counter_ = 0;
 
   void build_cmd_header_(uint8_t *f, uint8_t payload_len) {
@@ -376,13 +364,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     f[16] = (value     ) & 0xFF;
     f[17] = checksum_(f, 17);
     write_array(f, 18);
-    ESP_LOGD(TAG, "TX: res=0x%02X val=%u (uint16 BE)", resource, value);
-  }
-
-  static const char *mode_name_(uint8_t m) {
-    if (m == 1) return "natural";
-    if (m == 2) return "smart";
-    return "direct";
+    ESP_LOGD(TAG, "TX: res=0x%02X val=%u min (uint16 BE)", resource, value);
   }
 };
 
