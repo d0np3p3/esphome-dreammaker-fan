@@ -10,7 +10,30 @@
 4. The fan appears in Home Assistant as a fan entity with speed 1–100%, oscillation,
    mode select, angle select, timer, child lock, LED, sound, and temperature/humidity sensors.
 
-## Wiring
+## Flashing the PCB
+
+The fan board uses an **ESP32-WROOM-32D**. The pads `BOOT`, `RXD`, `TXD`, `GND` and a `RESET` button are exposed on the PCB — no soldering of new pads required.
+
+### Connections (USB-to-UART adapter → PCB)
+
+| Adapter | PCB pad |
+|---------|---------|
+| TX | RXD |
+| RX | TXD |
+| GND | GND |
+| 3.3 V | 3.3 V (if not powered separately) |
+
+### Procedure
+
+1. Connect the adapter as above.
+2. Hold **BOOT**, then press **RESET** (or hold BOOT while powering up) to enter flash mode.
+3. Release BOOT.
+4. Flash: `esphome run dm_fan.yaml`
+5. After the first OTA-capable flash, subsequent updates can be done wirelessly.
+
+> **Note:** Power the board from 3.3 V on the adapter — do **not** connect mains/motor power while flashing.
+
+## Normal UART wiring (ESP32 ↔ fan MCU, post-flash)
 
 | ESP32 pin | Fan UART |
 |-----------|---------|
