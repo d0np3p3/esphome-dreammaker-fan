@@ -15,8 +15,9 @@ esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
   comment: "Zeico / Dream Maker Smart Fan — Native UART, no cloud"
+  min_version: "2026.4.5"
   project:
-    name: "esphome-dreammaker-fan"
+    name: "d0np3p3.dreammaker-fan"
     version: "2.1.0"
 
 esp32:
@@ -46,17 +47,18 @@ captive_portal:
 
 # ── Externe Komponente ────────────────────────────────────────────────────────
 external_components:
-  # Option A: Lokal (Dateien liegen neben dieser YAML)
-  - source:
-      type: local
-      path: components
-    components: [dm_fan]
-  # Option B: Via GitHub (nach Push aktivieren, Option A auskommentieren)
+  # Option A: Lokal — Dateien liegen neben dieser YAML
   # - source:
-  #     type: git
-  #     url: https://github.com/d0np3p3/esphome-dreammaker-fan
-  #     ref: main
+  #     type: local
+  #     path: components
   #   components: [dm_fan]
+
+  # Option B: Via GitHub (Standard)
+  - source:
+      type: git
+      url: https://github.com/d0np3p3/esphome-dreammaker-fan
+      ref: main
+    components: [dm_fan]
 
 # ── UART zur Fan-MCU ──────────────────────────────────────────────────────────
 uart:
@@ -74,17 +76,36 @@ fan:
     name: "DM Fan"
     uart_id: uart_bus
     temperature:
-      name: "Temperatur"          # IEEE754 float LE, bestätigt
+      name: "Temperatur"
       entity_category: diagnostic
     humidity:
-      name: "Luftfeuchtigkeit"    # IEEE754 float LE, bestätigt
+      name: "Luftfeuchtigkeit"
       entity_category: diagnostic
 
-# ── Oszillationswinkel (RES=0x04, bestätigt) ─────────────────────────────────
+# ── Selects ───────────────────────────────────────────────────────────────────
 select:
   - platform: template
+    name: "Modus"
+    icon: "mdi:leaf"
+    options:
+      - "Direct Breeze"
+      - "Natural Breeze"
+      - "Smart Breeze"
+    lambda: |-
+      uint8_t m = id(my_fan)->get_mode();
+      if (m == 1) return std::string("Natural Breeze");
+      if (m == 2) return std::string("Smart Breeze");
+      return std::string("Direct Breeze");
+    set_action:
+      lambda: |-
+        uint8_t mode = 0;
+        if (x == "Natural Breeze") mode = 1;
+        if (x == "Smart Breeze")   mode = 2;
+        id(my_fan)->set_mode(mode);
+
+  - platform: template
     name: "Oszillationswinkel"
-    icon: "mdi:angle-acute"
+    icon: "mdi:angle-obtuse"
     entity_category: config
     options: ["30°", "60°", "90°", "120°", "140°"]
     lambda: |-
@@ -143,13 +164,11 @@ button:
   - platform: template
     name: "Nach Links drehen"
     icon: "mdi:arrow-left-bold"
-    entity_category: config
     on_press:
       lambda: "id(my_fan)->rotate_left();"
 
   - platform: template
     name: "Nach Rechts drehen"
     icon: "mdi:arrow-right-bold"
-    entity_category: config
     on_press:
       lambda: "id(my_fan)->rotate_right();"
