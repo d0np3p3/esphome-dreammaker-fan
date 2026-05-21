@@ -1,8 +1,30 @@
 # ESPHome DM Fan Component
 
-**v2.0** — Native UART integration for Zeico / Dream Maker Smart Fan (DM-FAN01 / DM-FAN02)
+**v2.1** — Native UART integration for Zeico / Dream Maker Smart Fan (DM-FAN01 / DM-FAN02)
+
+## Quick Start
+
+1. Copy `dm_fan.yaml` to your ESPHome config directory.
+2. Create a `secrets.yaml` next to it (see `secrets.yaml.example`).
+3. Flash via ESPHome: `esphome run dm_fan.yaml`
+4. The fan appears in Home Assistant as a fan entity with speed 1–100%, oscillation,
+   mode select, angle select, timer, child lock, LED, sound, and temperature/humidity sensors.
+
+## Wiring
+
+| ESP32 pin | Fan UART |
+|-----------|---------|
+| GPIO17 (TX) | RX |
+| GPIO16 (RX) | TX |
+| GND | GND |
+| 3.3 V | VCC (logic only — motor power is separate) |
 
 ## Changelog
+
+### v2.1
+- Mode exposed as separate `select` entity (no preset_modes on the Fan entity)
+- Rotate-left / rotate-right buttons added (`RES_ROTATE 0x05`, UNCONFIRMED)
+- Millis-rollover fix: 300 ms anti-flap guard now uses unsigned subtraction — no 49-day freeze
 
 ### v2.0
 - TX protocol completely rewritten based on 31 confirmed UART captures (ESP→MCU)
@@ -12,7 +34,6 @@
 - Sound/LED/ChildLock: correct byte offsets (rx::SOUND=25, rx::LED=26, rx::CHILD_LOCK=27)
 - `rx::` namespace for all RX payload offsets — self-documenting
 - msg_counter_ for TX frame sequencing (matches original firmware)
-- Millis-rollover fix (49-day freeze bug)
 - ESPHome 2026.x: `external_components` + `esp-idf` framework
 
 ### v1.0
@@ -22,6 +43,7 @@
 
 ```
 dm_fan.yaml                        ← ESPHome configuration
+secrets.yaml.example               ← Required secrets template
 components/
   dm_fan/
     __init__.py                    ← Namespace declaration
@@ -57,6 +79,7 @@ FA CE | 00 0C | 04 | 23 47 | [counter 4B BE] | 00 | 03 | 00 | [resource] | [valu
 | 0x02 | Mode | uint8 0/1/2 |
 | 0x03 | Oscillation ON/OFF | bool |
 | 0x04 | Oscillation Angle | uint8 |
+| 0x05 | Rotate | uint8 0x01=left 0x02=right (UNCONFIRMED) |
 | 0x06 | Timer | uint16 BE minutes |
 | 0x07 | Sound | bool |
 | 0x08 | LED | bool |
