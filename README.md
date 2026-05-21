@@ -10,11 +10,11 @@
 4. The fan appears in Home Assistant as a fan entity with speed 1–100%, oscillation,
    mode select, angle select, timer, child lock, LED, sound, and temperature/humidity sensors.
 
-## Flashing the PCB
+## Flashing the ESP32 (one-time)
 
-The fan board uses an **ESP32-WROOM-32D**. The pads `BOOT`, `RXD`, `TXD`, `GND` and a `RESET` button are exposed on the PCB — no soldering of new pads required.
+The fan board uses an **ESP32-WROOM-32D**. The pads `BOOT`, `RXD`, `TXD`, `GND` and a `RESET` button are exposed on the PCB for flashing — connect a USB-to-UART adapter here. These pads are **only used during flashing** and have nothing to do with the ongoing MCU communication.
 
-### Connections (USB-to-UART adapter → PCB)
+### Connections (USB-to-UART adapter → PCB flash pads)
 
 | Adapter | PCB pad |
 |---------|---------|
@@ -23,29 +23,24 @@ The fan board uses an **ESP32-WROOM-32D**. The pads `BOOT`, `RXD`, `TXD`, `GND` 
 | GND | GND |
 | 3.3 V | 3.3 V (if not powered separately) |
 
+> **Note:** Power the board from 3.3 V on the adapter — do **not** connect mains/motor power while flashing.
+
 ### Procedure
 
 1. Connect the adapter as above.
-2. Bridge **MCU RST to GND** — there is a 5-pin header next to the ROHS label on the board; the Reset and GND pins are among those five. This holds the fan MCU in reset so it stays silent on the shared UART lines during flashing. Without this step the MCU periodically resets the ESP32.
-3. Bridge the **BOOT** pad to **GND** with a jumper wire (pulls GPIO0 low → flash mode). The BOOT pad is located next to the UART pads.
+2. Bridge **MCU RST to GND** — there is a 5-pin header next to the ROHS label on the board; Reset and GND are among those five pins. This holds the fan MCU in reset so it cannot send data while the flash UART is busy. Without this the MCU resets the ESP32 every 5–10 min.
+3. Bridge the **BOOT** pad to **GND** (pulls GPIO0 low → ESP32 enters flash mode). BOOT is located next to the UART pads.
 4. Press **RESET** briefly — the ESP32 boots into flash mode ("waiting for download" in serial).
 5. Remove the BOOT–GND bridge.
 6. Flash: `esphome run dm_fan.yaml`
-7. Remove the MCU RST–GND bridge to let the fan MCU run again.
-8. After the first OTA-capable flash, subsequent updates can be done wirelessly.
+7. Remove the MCU RST–GND bridge — the fan MCU resumes normal operation.
+8. After the first flash, subsequent updates can be done wirelessly via OTA.
 
-> **Baud rate note:** Community testing (hbgcreaghaht, BobeOlsen) found **9600 baud** as the default and 19200 as an alternative that may work better on some units. If the MCU appears silent after flashing, change `baud_rate` in `dm_fan.yaml` from `9600` to `19200`.
+## ESP32 ↔ Fan MCU communication (internal, no wiring needed)
 
-> **Note:** Power the board from 3.3 V on the adapter — do **not** connect mains/motor power while flashing.
+After flashing, the ESP32 talks to the fan MCU over an **internal UART already wired on the PCB** — GPIO17 (TX) and GPIO16 (RX). No external cables are required for this. The `baud_rate` in `dm_fan.yaml` configures this internal link.
 
-## Normal UART wiring (ESP32 ↔ fan MCU, post-flash)
-
-| ESP32 pin | Fan UART |
-|-----------|---------|
-| GPIO17 (TX) | RX |
-| GPIO16 (RX) | TX |
-| GND | GND |
-| 3.3 V | VCC (logic only — motor power is separate) |
+> **Baud rate:** Community testing (hbgcreaghaht) found **19200** works best on GPIO16/17 for the MCU UART. The YAML currently uses `9600` — change it to `19200` if the MCU appears silent after flashing.
 
 ## Changelog
 
