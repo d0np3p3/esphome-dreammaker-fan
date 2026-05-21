@@ -26,10 +26,11 @@ The fan board uses an **ESP32-WROOM-32D**. The pads `BOOT`, `RXD`, `TXD`, `GND` 
 ### Procedure
 
 1. Connect the adapter as above.
-2. Hold **BOOT**, then press **RESET** (or hold BOOT while powering up) to enter flash mode.
-3. Release BOOT.
-4. Flash: `esphome run dm_fan.yaml`
-5. After the first OTA-capable flash, subsequent updates can be done wirelessly.
+2. Bridge the **BOOT** pad to **GND** with a jumper wire (this pulls GPIO0 low).
+3. Press **RESET** briefly — the ESP32 boots into flash mode.
+4. Remove the BOOT–GND bridge.
+5. Flash: `esphome run dm_fan.yaml`
+6. After the first OTA-capable flash, subsequent updates can be done wirelessly.
 
 > **Note:** Power the board from 3.3 V on the adapter — do **not** connect mains/motor power while flashing.
 
