@@ -1,11 +1,10 @@
 # DM Fan ESPHome Configuration
-# v2.1 — Added rotate_left/rotate_right (RES=0x05)
+# v2.1 — Single-property TX protocol (CMD=0x04), confirmed from 31 UART captures
+#
 # Changelog:
-#   v1.0 — Initial UART implementation (full state frame, unconfirmed)
-#   v2.0 — Single-property CMD=0x04 TX protocol, IEEE754 temp/hum,
-#           timer 0-8h uint16 BE, confirmed byte offsets from image table,
-#           millis-rollover fix, rx:: namespace offsets
-#   v2.1 — rotate_left/rotate_right (Property 0x05, 0x01=left 0x02=right)
+#   v1.0 — Initial implementation
+#   v2.0 — Confirmed TX protocol, IEEE754 temp/hum, timer 0-8h
+#   v2.1 — Mode as separate Select, rotate buttons, millis-rollover fix
 
 substitutions:
   device_name: dreammaker-fan
@@ -23,10 +22,10 @@ esphome:
 esp32:
   board: esp32dev
   framework:
-    type: esp-idf   # Default seit ESPHome 2026.1.0
+    type: esp-idf
 
 logger:
-  level: DEBUG     # Nach erstem Test auf INFO reduzieren
+  level: DEBUG
 
 api:
   encryption:
@@ -47,29 +46,25 @@ captive_portal:
 
 # ── Externe Komponente ────────────────────────────────────────────────────────
 external_components:
-  # Option A: Lokal — Dateien liegen neben dieser YAML
-  # - source:
-  #     type: local
-  #     path: components
-  #   components: [dm_fan]
-
-  # Option B: Via GitHub (Standard)
   - source:
       type: git
       url: https://github.com/d0np3p3/esphome-dreammaker-fan
       ref: main
     components: [dm_fan]
+  # Lokal (zum Testen):
+  # - source:
+  #     type: local
+  #     path: components
+  #   components: [dm_fan]
 
-# ── UART zur Fan-MCU ──────────────────────────────────────────────────────────
+# ── UART ─────────────────────────────────────────────────────────────────────
 uart:
   id: uart_bus
-  tx_pin: GPIO17   # ESP→MCU
-  rx_pin: GPIO16   # MCU→ESP
+  tx_pin: GPIO17
+  rx_pin: GPIO16
   baud_rate: 9600
-  # Falls keine Frames ankommen → 115200 probieren
 
-# ── Lüfter ────────────────────────────────────────────────────────────────────
-# Enthält: Power, Speed 1-100%, Oscillation ON/OFF, Preset (direct/natural/smart)
+# ── Fan: Power / Speed 1-100% / Oscillation ──────────────────────────────────
 fan:
   - platform: dm_fan
     id: my_fan
@@ -82,20 +77,17 @@ fan:
       name: "Luftfeuchtigkeit"
       entity_category: diagnostic
 
-# ── Selects ───────────────────────────────────────────────────────────────────
+# ── Selects: Modus + Winkel ───────────────────────────────────────────────────
 select:
   - platform: template
     name: "Modus"
     icon: "mdi:leaf"
+    optimistic: true
+    initial_option: "Direct Breeze"
     options:
       - "Direct Breeze"
       - "Natural Breeze"
       - "Smart Breeze"
-    lambda: |-
-      uint8_t m = id(my_fan)->get_mode();
-      if (m == 1) return std::string("Natural Breeze");
-      if (m == 2) return std::string("Smart Breeze");
-      return std::string("Direct Breeze");
     set_action:
       lambda: |-
         uint8_t mode = 0;
@@ -107,9 +99,14 @@ select:
     name: "Oszillationswinkel"
     icon: "mdi:angle-obtuse"
     entity_category: config
-    options: ["30°", "60°", "90°", "120°", "140°"]
-    lambda: |-
-      return str_sprintf("%d°", id(my_fan)->get_roll_angle());
+    optimistic: true
+    initial_option: "90°"
+    options:
+      - "30°"
+      - "60°"
+      - "90°"
+      - "120°"
+      - "140°"
     set_action:
       lambda: |-
         int deg = 90;
@@ -120,7 +117,7 @@ select:
         if (x == "140°") deg = 140;
         id(my_fan)->set_roll_angle(deg);
 
-# ── Timer 0-8h (RES=0x06, uint16 BE Minuten, bestätigt) ──────────────────────
+# ── Timer 0-8h ────────────────────────────────────────────────────────────────
 number:
   - platform: template
     name: "Timer (Stunden)"
@@ -129,17 +126,17 @@ number:
     max_value: 8
     step: 1
     entity_category: config
-    lambda: "return id(my_fan)->get_timer_hours();"
+    optimistic: true
     set_action:
       lambda: "id(my_fan)->set_timer_hours(x);"
 
-# ── Schalter ──────────────────────────────────────────────────────────────────
+# ── Schalter: Kindersicherung / LED / Töne ───────────────────────────────────
 switch:
   - platform: template
     name: "Kindersicherung"
     icon: "mdi:baby-carriage"
     entity_category: config
-    lambda: "return id(my_fan)->get_child_lock();"
+    optimistic: true
     turn_on_action:  { lambda: "id(my_fan)->set_child_lock(true);" }
     turn_off_action: { lambda: "id(my_fan)->set_child_lock(false);" }
 
@@ -147,7 +144,7 @@ switch:
     name: "LED Anzeige"
     icon: "mdi:led-on"
     entity_category: config
-    lambda: "return id(my_fan)->get_led();"
+    optimistic: true
     turn_on_action:  { lambda: "id(my_fan)->set_led(true);" }
     turn_off_action: { lambda: "id(my_fan)->set_led(false);" }
 
@@ -155,20 +152,20 @@ switch:
     name: "Tastentöne"
     icon: "mdi:volume-high"
     entity_category: config
-    lambda: "return id(my_fan)->get_sound();"
+    optimistic: true
     turn_on_action:  { lambda: "id(my_fan)->set_sound(true);" }
     turn_off_action: { lambda: "id(my_fan)->set_sound(false);" }
 
-# ── Manuelles Rotieren (RES=0x05, nur wenn Oszillation AUS) ──────────────────
+# ── Buttons: Links / Rechts (Steuerung) ──────────────────────────────────────
 button:
   - platform: template
     name: "Nach Links drehen"
-    icon: "mdi:arrow-left-bold"
+    icon: "mdi:pan-left"
     on_press:
       lambda: "id(my_fan)->rotate_left();"
 
   - platform: template
     name: "Nach Rechts drehen"
-    icon: "mdi:arrow-right-bold"
+    icon: "mdi:pan-right"
     on_press:
       lambda: "id(my_fan)->rotate_right();"
