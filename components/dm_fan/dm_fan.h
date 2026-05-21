@@ -113,8 +113,8 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   // ── Lifecycle ────────────────────────────────────────────────────────────
   void setup() override {
     ESP_LOGI(TAG, "DM Fan v2.1 ready — TX=GPIO17 RX=GPIO16 9600 baud");
-    // FIX: set_supported_preset_modes on Fan entity (not on FanTraits)
-    this->set_supported_preset_modes({"direct", "natural", "smart"});
+    // Mode is handled as a separate Select entity in YAML
+    // this->set_supported_preset_modes() intentionally not called
     auto restore = this->restore_state_();
     // FIX: apply() takes Fan& not Fan*
     if (restore.has_value()) restore->apply(*this);
@@ -153,17 +153,15 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
       desired_.oscillation = *call.get_oscillating();
       send_cmd_bool_(RES_OSC_ONOFF, desired_.oscillation);
     }
-    // FIX: get_preset_mode() returns const char*, not Optional<string>
-    if (call.get_preset_mode() != nullptr) {
-      std::string m(call.get_preset_mode());
-      if      (m == "natural") desired_.mode = 1;
-      else if (m == "smart")   desired_.mode = 2;
-      else                     desired_.mode = 0;
-      send_cmd_byte_(RES_MODE, desired_.mode);
-    }
+    // Mode is handled via set_mode() from the separate Select entity
   }
 
   // ── Extra controls ────────────────────────────────────────────────────────
+  void set_mode(uint8_t mode) {
+    if (mode > 2) return;
+    desired_.mode = mode;
+    send_cmd_byte_(RES_MODE, desired_.mode);
+  }
   void set_roll_angle(int deg) {
     desired_.roll_angle = angle_to_byte(deg);
     send_cmd_byte_(RES_OSC_ANGLE, desired_.roll_angle);
@@ -180,6 +178,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   void rotate_right() { send_cmd_byte_(RES_ROTATE, 0x02); }
 
   int   get_roll_angle()  const { return byte_to_angle(desired_.roll_angle); }
+  uint8_t get_mode()      const { return desired_.mode; }
   bool  get_sound()       const { return desired_.sound; }
   bool  get_led()         const { return desired_.led; }
   bool  get_child_lock()  const { return desired_.child_lock; }
@@ -308,8 +307,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
       this->state       = hw_state_.power;
       this->speed       = hw_state_.speed;
       this->oscillating = hw_state_.oscillation;
-      // FIX: preset_mode_ is private — use set_preset_mode_()
-      this->set_preset_mode_(mode_name_(hw_state_.mode));
+      // Mode state synced via separate Select entity in YAML
       this->publish_state();
     }
   }
