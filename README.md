@@ -5,7 +5,7 @@
 ## Quick Start
 
 1. Copy `dm_fan.yaml` to your ESPHome config directory.
-2. Create a `secrets.yaml` next to it (see `secrets.yaml.example`).
+2. Provide the required entries in your `secrets.yaml` (`wifi_ssid`, `wifi_password`, `wifi_ap_password`, `api_encryption_key`, `ota_password`).
 3. Flash via ESPHome: `esphome run dm_fan.yaml`
 4. The fan appears in Home Assistant as a fan entity with speed 1–100%, oscillation,
    mode select, angle select, timer, child lock, LED, sound, and temperature/humidity sensors.
@@ -43,7 +43,6 @@
 
 ```
 dm_fan.yaml                        ← ESPHome configuration
-secrets.yaml.example               ← Required secrets template
 components/
   dm_fan/
     __init__.py                    ← Namespace declaration
