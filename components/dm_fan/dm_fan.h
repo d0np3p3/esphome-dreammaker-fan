@@ -168,8 +168,14 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     desired_.timer_min = (uint16_t)(std::max(0.0f, std::min(8.0f, h)) * 60.0f);
     send_cmd_uint16_(RES_TIMER, desired_.timer_min);
   }
-  void rotate_left()  { send_cmd_byte_(RES_ROTATE, 0x01); }  // UNCONFIRMED
-  void rotate_right() { send_cmd_byte_(RES_ROTATE, 0x02); }  // UNCONFIRMED
+  void rotate_left() {
+    ESP_LOGW(TAG, "rotate_left: RES_ROTATE (0x05) is UNCONFIRMED — device reaction unknown");
+    send_cmd_byte_(RES_ROTATE, 0x01);
+  }
+  void rotate_right() {
+    ESP_LOGW(TAG, "rotate_right: RES_ROTATE (0x05) is UNCONFIRMED — device reaction unknown");
+    send_cmd_byte_(RES_ROTATE, 0x02);
+  }
 
   uint8_t  get_mode()        const { return desired_.mode; }
   int      get_roll_angle()  const { return byte_to_angle(desired_.roll_angle); }
@@ -319,6 +325,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     f[10] = (msg_counter_      ) & 0xFF;
     msg_counter_++;
     f[11] = 0x00;
+    f[12] = 0x00;  // overwritten by send_cmd_*
     f[13] = 0x00;
   }
 

@@ -42,6 +42,12 @@ After flashing, the ESP32 talks to the fan MCU over an **internal UART already w
 
 > **Baud rate:** Community testing (hbgcreaghaht) found **19200** works best on GPIO16/17 for the MCU UART. The YAML currently uses `9600` — change it to `19200` if the MCU appears silent after flashing.
 
+## Known Limitations
+
+**Mode Select not synced from MCU:** When the fan MCU pushes a state frame (e.g. after a physical button press), the ESPHome `fan` entity (power, speed, oscillation) updates automatically. However, the `Modus` template select in HA does **not** update, because ESPHome template selects have no C++ API for programmatic state updates from a custom component. The actual mode is tracked internally and sent correctly on the next command — it is only the HA display that may lag behind until the user changes the mode via HA.
+
+**Rotate buttons unconfirmed:** `RES_ROTATE (0x05)` was derived from the firmware binary, not from live UART captures. A warning is logged when these buttons are pressed.
+
 ## Changelog
 
 ### v2.1
