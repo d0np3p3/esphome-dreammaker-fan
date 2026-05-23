@@ -62,7 +62,7 @@ uart:
   id: uart_bus
   tx_pin: GPIO17
   rx_pin: GPIO16
-  baud_rate: 9600
+  baud_rate: 9600  # hbgcreaghaht reports 19200 works best — change here if MCU is silent
 
 # ── Fan: Power / Speed 1-100% / Oscillation ──────────────────────────────────
 fan:
