@@ -17,7 +17,7 @@ esphome:
   min_version: "2026.4.5"
   project:
     name: "d0np3p3.dreammaker-fan"
-    version: "2.1.0"
+    version: "2.2.0"
 
 esp32:
   board: esp32dev
@@ -62,7 +62,7 @@ uart:
   id: uart_bus
   tx_pin: GPIO17
   rx_pin: GPIO16
-  baud_rate: 9600  # hbgcreaghaht reports 19200 works best — change here if MCU is silent
+  baud_rate: 19200  # confirmed from hardware test 2026-05-23
 
 # ── Fan: Power / Speed 1-100% / Oscillation ──────────────────────────────────
 fan:

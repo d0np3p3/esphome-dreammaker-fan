@@ -33,12 +33,11 @@ constexpr uint8_t RES_SOUND     = 0x07;
 constexpr uint8_t RES_LED       = 0x08;
 constexpr uint8_t RES_CHILDLOCK = 0x09;
 
-// WiFi keepalive — resource 0x70 paired with query 0x78 (from firmware binary)
-// Without this the MCU reboots the ESP every 5-10 min
-static const uint8_t WIFI_RESPONSE[14] = {
-  0xFA, 0xCE, 0x00, 0x09, 0x81, 0x00, 0x70,
-  0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0xC4
-};
+// WiFi response — CONFIRMED from original firmware log:
+// MCU sends: action:2,  resource:0x78, length:9
+// ESP sends:  action:82, resource:0x78, length:0x3B (59 bytes = 3 header + 56 data)
+// Data = full fan state (56 bytes). Until state is known, send zeros.
+// Note: our previous assumption (action:0x81, resource:0x70) was WRONG.
 
 // ── RX payload offsets ────────────────────────────────────────────────────────
 // parse_buf_[0] = CMD byte (frame byte 4, after 4-byte header FA CE 00 24)
@@ -113,10 +112,19 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
 
   // ── Lifecycle ────────────────────────────────────────────────────────────
   void setup() override {
-    ESP_LOGI(TAG, "DM Fan v2.1 ready — TX=GPIO17 RX=GPIO16 9600 baud");
+    ESP_LOGI(TAG, "DM Fan v2.2 ready — TX=GPIO17 RX=GPIO16 19200 baud");
     // Mode handled as separate Select entity — no preset_modes on Fan
     auto restore = this->restore_state_();
     if (restore.has_value()) restore->apply(*this);
+    // Boot-Init: request full state from MCU (action:2, resource:0x232A)
+    // Confirmed from original firmware log: ESP always sends this first
+    uint8_t init[14] = {MAGIC_0, MAGIC_1, 0x00, 0x09, 0x02, 0x23, 0x2A,
+                        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint8_t ichk = 0;
+    for (int i = 0; i < 13; i++) ichk += init[i];
+    init[13] = ichk;
+    write_array(init, 14);
+    ESP_LOGD(TAG, "Boot-Init: requesting MCU state (action:2 resource:0x232A)");
   }
 
   fan::FanTraits get_traits() override {
@@ -168,14 +176,8 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     desired_.timer_min = (uint16_t)(std::max(0.0f, std::min(8.0f, h)) * 60.0f);
     send_cmd_uint16_(RES_TIMER, desired_.timer_min);
   }
-  void rotate_left() {
-    ESP_LOGW(TAG, "rotate_left: RES_ROTATE (0x05) is UNCONFIRMED — device reaction unknown");
-    send_cmd_byte_(RES_ROTATE, 0x01);
-  }
-  void rotate_right() {
-    ESP_LOGW(TAG, "rotate_right: RES_ROTATE (0x05) is UNCONFIRMED — device reaction unknown");
-    send_cmd_byte_(RES_ROTATE, 0x02);
-  }
+  void rotate_left()  { send_cmd_byte_(RES_ROTATE, 0x01); }  // UNCONFIRMED
+  void rotate_right() { send_cmd_byte_(RES_ROTATE, 0x02); }  // UNCONFIRMED
 
   uint8_t  get_mode()        const { return desired_.mode; }
   int      get_roll_angle()  const { return byte_to_angle(desired_.roll_angle); }
@@ -244,6 +246,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
           uint8_t cmd = parse_buf_[0];
           if      (cmd == CMD_QUERY && parse_len_ >= 9)  on_wifi_query_();
           else if (cmd == CMD_STATE && parse_len_ >= 36) on_state_frame_();
+          else if (cmd == 0x01) on_action1_(parse_buf_[1], parse_buf_[2]);
           else ESP_LOGD(TAG, "CMD 0x%02X len=%u", cmd, parse_len_);
         } else {
           ESP_LOGW(TAG, "Checksum error: got 0x%02X expected 0x%02X", b, chk);
@@ -255,8 +258,50 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   }
 
   void on_wifi_query_() {
-    ESP_LOGD(TAG, "WiFi query → responding connected");
-    write_array(WIFI_RESPONSE, sizeof(WIFI_RESPONSE));
+    // CONFIRMED from original firmware log:
+    // action:82, resource:0x78, data_length:0x3B (59 bytes total payload)
+    // Full frame = FA CE 00 3B 82 00 78 [56 bytes state] [chk]
+    uint8_t f[64] = {
+      0xFA, 0xCE,   // magic
+      0x00, 0x3B,   // length = 59
+      0x82,         // action = 0x82 (confirmed, NOT 0x81)
+      0x00, 0x78,   // resource = 0x78 (echo, NOT 0x70)
+    };
+    // Bytes 7-62: fan state (56 bytes)
+    // Fill with current desired state at known positions
+    // Remaining unknown bytes stay 0x00
+    f[7 + 15] = desired_.power ? 1 : 0;      // ~frame[22]
+    f[7 + 16] = desired_.speed;               // ~frame[23]
+    f[7 + 17] = desired_.mode;                // ~frame[24]
+    f[7 + 18] = desired_.oscillation ? 1 : 0; // ~frame[25]
+    f[7 + 19] = desired_.roll_angle;          // ~frame[26]
+    f[7 + 21] = desired_.timer_min >> 8;      // ~frame[27]
+    f[7 + 22] = desired_.timer_min & 0xFF;    // ~frame[28]
+    // checksum = sum of all bytes except last
+    uint8_t chk = 0;
+    for (int i = 0; i < 63; i++) chk += f[i];
+    f[63] = chk;
+    write_array(f, 64);
+    ESP_LOGD(TAG, "WiFi query → responding (action:82 resource:78 len:59)");
+  }
+
+  void on_action1_(uint8_t res_hi, uint8_t res_lo) {
+    // Generic ACK for MCU commands (action:1).
+    // Confirmed resources:
+    //   0x238D = reset command  → ACK + ignore (no reboot in ESPHome)
+    //   0x1F44 = provisioning   → ACK + ignore
+    //   Others                  → ACK + log
+    uint16_t res = ((uint16_t)res_hi << 8) | res_lo;
+    // Build ACK: FA CE 00 09 81 res_hi res_lo 01 00 00 00 00 00 [chk]
+    uint8_t f[14] = {MAGIC_0, MAGIC_1, 0x00, 0x09, 0x81,
+                     res_hi, res_lo, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    uint8_t chk = 0;
+    for (int i = 0; i < 13; i++) chk += f[i];
+    f[13] = chk;
+    write_array(f, 14);
+    if      (res == 0x238D) ESP_LOGD(TAG, "MCU reset cmd (0x238D) → ACK, ignoring");
+    else if (res == 0x1F44) ESP_LOGD(TAG, "MCU provisioning cmd (0x1F44) → ACK, ignoring");
+    else                    ESP_LOGD(TAG, "MCU action:1 res=0x%04X → ACK", res);
   }
 
   void on_state_frame_() {
@@ -325,7 +370,6 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     f[10] = (msg_counter_      ) & 0xFF;
     msg_counter_++;
     f[11] = 0x00;
-    f[12] = 0x00;  // overwritten by send_cmd_*
     f[13] = 0x00;
   }
 
