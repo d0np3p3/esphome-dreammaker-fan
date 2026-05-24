@@ -66,18 +66,17 @@ The fan board uses an **ESP32-WROOM-32D**. The pads `BOOT`, `RXD`, `TXD`, `GND` 
 | TX | RXD |
 | RX | TXD |
 | GND | GND |
-| 3.3 V | 3.3 V (if not powered separately) |
 
-> **Note:** Power the board from 3.3 V on the adapter — do **not** connect mains/motor power while flashing.
+> **Note:** Power the board from original fan power — do **not** connect motor power while flashing (two connectors)
 
 ### Procedure
 
 1. Connect the adapter as above.
 2. Bridge **MCU RST to GND** — there is a 5-pin header next to the ROHS label on the board; Reset and GND are among those five pins. This holds the fan MCU in reset so it cannot send data while the flash UART is busy. Without this the MCU resets the ESP32 every 5–10 min.
 3. Bridge the **BOOT** pad to **GND** (pulls GPIO0 low → ESP32 enters flash mode). BOOT is located next to the UART pads.
-4. Press **RESET** briefly — the ESP32 boots into flash mode ("waiting for download" in serial).
+4. Bridge **RESET** briefly — the ESP32 boots into flash mode ("waiting for download" in serial).
 5. Remove the BOOT–GND bridge.
-6. Flash: `esphome run dm_fan.yaml`
+6. Flash via esptool, ESPWeb Tool, or your preferred tool. **Make a backup first.**
 7. Remove the MCU RST–GND bridge — the fan MCU resumes normal operation.
 8. After the first flash, subsequent updates can be done wirelessly via OTA.
 
@@ -210,3 +209,9 @@ Without response → MCU pulls EN pin LOW → POWERON_RESET after ~4 minutes.
 
 Reverse engineered by **d0np3p3** with AI assistance (Claude + Gemini).  
 Protocol analysis from original firmware UART logs, BLE snoop captures, and NVS dumps.
+
+### Special thanks
+
+- **[@BobeOlsen](https://github.com/BobeOlsen)** — early research and hardware exploration
+- **[@hbgcreag](https://github.com/hbgcreaghaht)** — contributions to protocol understanding  
+- **[@dhewg](https://github.com/dhewg)** and the **[esphome-miot](https://github.com/dhewg/esphome-miot/issues/50)** community — foundational work on Zeico/DreamMaker UART protocol, without which this project would not have been possible
