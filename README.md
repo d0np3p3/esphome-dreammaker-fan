@@ -1,4 +1,4 @@
-# ESPHome DreamMaker Fan Component
+no# ESPHome DreamMaker Fan Component
 
 **v2.2** — Native UART integration for Zeico / DreamMaker Smart Fan (DM-FAN01 / DM-FAN02-W)  
 Fully local, no cloud, no Tuya — works 100% offline via Home Assistant.
@@ -32,7 +32,6 @@ Fully local, no cloud, no Tuya — works 100% offline via Home Assistant.
 
 - **Fan:** DM-FAN01 / DM-FAN02-W (identical hardware, battery difference only)
 - **MCU chip:** ESP32-WROOM-32D
-- **MAC:** `98:F4:AB:24:FF:F8`
 - **UART2:** TX=GPIO17 (ESP→MCU), RX=GPIO16 (MCU→ESP)
 - **Baudrate:** 19200 (confirmed from hardware test)
 - **Framework:** ESP-IDF (required for UART2)
