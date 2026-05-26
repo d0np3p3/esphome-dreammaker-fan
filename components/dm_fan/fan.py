@@ -1,6 +1,6 @@
 """
 DM Fan — fan platform for ESPHome 2026.x
-v2.0 — TX protocol confirmed from 31 UART captures
+v3.0 — 3-stage WiFi handshake (non-blocking)
 """
 import esphome.codegen as cg
 import esphome.config_validation as cv

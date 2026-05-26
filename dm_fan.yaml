@@ -1,10 +1,5 @@
 # DM Fan ESPHome Configuration
-# v2.1 — Single-property TX protocol (CMD=0x04), confirmed from 31 UART captures
-#
-# Changelog:
-#   v1.0 — Initial implementation
-#   v2.0 — Confirmed TX protocol, IEEE754 temp/hum, timer 0-8h
-#   v2.1 — Mode as separate Select, rotate buttons, millis-rollover fix
+# v3.0.0-beta — 3-stage WiFi handshake (non-blocking)
 
 substitutions:
   device_name: dreammaker-fan
@@ -17,7 +12,7 @@ esphome:
   min_version: "2026.4.5"
   project:
     name: "d0np3p3.dreammaker-fan"
-    version: "2.2.0"
+    version: "3.0.0-beta"
 
 esp32:
   board: esp32dev
@@ -44,14 +39,14 @@ wifi:
 
 captive_portal:
 
-# ── Externe Komponente ────────────────────────────────────────────────────────
+# ── External component ────────────────────────────────────────────────────────
 external_components:
   - source:
       type: git
       url: https://github.com/d0np3p3/esphome-dreammaker-fan
-      ref: main
+      ref: v3.0.0-beta
     components: [dm_fan]
-  # Lokal (zum Testen):
+  # Local (for testing):
   # - source:
   #     type: local
   #     path: components
@@ -77,7 +72,7 @@ fan:
       name: "Luftfeuchtigkeit"
       entity_category: diagnostic
 
-# ── Selects: Modus + Winkel ───────────────────────────────────────────────────
+# ── Selects: Mode + Angle ─────────────────────────────────────────────────────
 select:
   - platform: template
     name: "Modus"
@@ -130,7 +125,7 @@ number:
     set_action:
       lambda: "id(my_fan)->set_timer_hours(x);"
 
-# ── Schalter: Kindersicherung / LED / Töne ───────────────────────────────────
+# ── Switches: Child lock / LED / Sound ───────────────────────────────────────
 switch:
   - platform: template
     name: "Kindersicherung"
@@ -156,7 +151,7 @@ switch:
     turn_on_action:  { lambda: "id(my_fan)->set_sound(true);" }
     turn_off_action: { lambda: "id(my_fan)->set_sound(false);" }
 
-# ── Buttons: Links / Rechts (Steuerung) ──────────────────────────────────────
+# ── Buttons: Rotate left / right ─────────────────────────────────────────────
 button:
   - platform: template
     name: "Nach Links drehen"
