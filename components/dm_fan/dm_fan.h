@@ -11,7 +11,7 @@
 namespace esphome {
 namespace dm_fan {
 
-static const char *const TAG = "dm_fan.v3.0";
+static const char *const TAG = "dm_fan.v3.0.0-beta";
 
 // ── Protocol constants ────────────────────────────────────────────────────────
 constexpr uint8_t MAGIC_0   = 0xFA;
@@ -161,6 +161,10 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     auto restore = this->restore_state_();
     if (restore.has_value()) restore->apply(*this);
 
+    // Pre-date the anti-flap lock so the first MCU state frame after boot
+    // is not swallowed by the 300 ms window (rollover-safe).
+    last_control_time_ = millis() - 1000;
+
     // Boot-Init: request full state from MCU (action:2, resource:0x232A)
     // Confirmed from original firmware log — ESP always sends this on startup
     uint8_t init[14] = {MAGIC_0, MAGIC_1, 0x00, 0x09, 0x02, 0x23, 0x2A,
@@ -278,7 +282,9 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   // 2-byte length field (big-endian) per frame header FA CE [len_hi] [len_lo]
   enum class ParseState { MAGIC0, MAGIC1, LEN_H, LEN_L, PAYLOAD, CHECKSUM };
   ParseState parse_st_ = ParseState::MAGIC0;
-  uint8_t    parse_buf_[64]{};
+  // 160 bytes: large enough for the ~128-byte boot state response (0x232A)
+  // so it is not rejected as "invalid length"; normal frames are <= 41 bytes.
+  uint8_t    parse_buf_[160]{};
   uint16_t   parse_len_ = 0;
   uint16_t   parse_idx_ = 0;
 
