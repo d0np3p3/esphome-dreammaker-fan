@@ -39,9 +39,21 @@ Fully local, no cloud, no Tuya — works 100% offline via Home Assistant.
 
 ## Installation
 
-1. Copy `components/dm_fan/` into your ESPHome config folder.
-2. Copy `dm_fan.yaml` and adapt WiFi credentials + API key.
-3. Flash via USB first time, then OTA.
+Reference the component directly from GitHub — no need to copy files:
+
+```yaml
+external_components:
+  - source:
+      type: git
+      url: https://github.com/d0np3p3/esphome-dreammaker-fan
+      ref: main
+    components: [dm_fan]
+```
+
+1. Copy `dm_fan.yaml` and adapt WiFi credentials + API key.
+2. Flash via USB the first time, then OTA.
+
+Alternatively, copy `components/dm_fan/` into your ESPHome config folder and use a local source:
 
 ```yaml
 external_components:
