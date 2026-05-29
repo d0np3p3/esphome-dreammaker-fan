@@ -1,10 +1,5 @@
 # DM Fan ESPHome Configuration
-# v2.1 — Single-property TX protocol (CMD=0x04), confirmed from 31 UART captures
-#
-# Changelog:
-#   v1.0 — Initial implementation
-#   v2.0 — Confirmed TX protocol, IEEE754 temp/hum, timer 0-8h
-#   v2.1 — Mode as separate Select, rotate buttons, millis-rollover fix
+# v2.2 — Mode as fan preset (syncs from MCU), speed slider, parse_buf enlarged
 
 substitutions:
   device_name: dreammaker-fan
@@ -77,24 +72,9 @@ fan:
       name: "Luftfeuchtigkeit"
       entity_category: diagnostic
 
-# ── Selects: Modus + Winkel ───────────────────────────────────────────────────
+# ── Selects: Winkel ──────────────────────────────────────────────────────────
+# Note: Mode (Direct/Natural/Smart) is now a fan preset — visible in the HA fan card.
 select:
-  - platform: template
-    name: "Modus"
-    icon: "mdi:leaf"
-    optimistic: true
-    initial_option: "Direct Breeze"
-    options:
-      - "Direct Breeze"
-      - "Natural Breeze"
-      - "Smart Breeze"
-    set_action:
-      lambda: |-
-        uint8_t mode = 0;
-        if (x == "Natural Breeze") mode = 1;
-        if (x == "Smart Breeze")   mode = 2;
-        id(my_fan)->set_mode(mode);
-
   - platform: template
     name: "Oszillationswinkel"
     icon: "mdi:angle-obtuse"
