@@ -19,6 +19,12 @@ esp32:
   framework:
     type: esp-idf
 
+# Disable the ESP-IDF online component manager so builds work without
+# internet access to components-file.espressif.com (mdns and other
+# components are already bundled inside the framework-espidf package).
+platformio_options:
+  board_build.cmake_extra_args: "-DIDF_COMPONENT_MANAGER=0"
+
 logger:
   level: DEBUG
 
