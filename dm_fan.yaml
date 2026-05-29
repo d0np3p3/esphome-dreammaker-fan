@@ -1,5 +1,5 @@
 # DM Fan ESPHome Configuration
-# v3.0.0-beta — 3-stage WiFi handshake (non-blocking)
+# v3.0.0 — 3-stage WiFi handshake (non-blocking)
 
 substitutions:
   device_name: dreammaker-fan
@@ -12,7 +12,7 @@ esphome:
   min_version: "2026.4.5"
   project:
     name: "d0np3p3.dreammaker-fan"
-    version: "3.0.0-beta"
+    version: "3.0.0"
 
 esp32:
   board: esp32dev

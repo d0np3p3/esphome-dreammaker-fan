@@ -13,7 +13,7 @@
 namespace esphome {
 namespace dm_fan {
 
-static const char *const TAG = "dm_fan.v3.0.0-beta";
+static const char *const TAG = "dm_fan.v3.0.0";
 
 // ── Protocol constants ────────────────────────────────────────────────────────
 constexpr uint8_t MAGIC_0   = 0xFA;
@@ -159,7 +159,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   void setup() override {
-    ESP_LOGI(TAG, "DM Fan v3.0.0-beta — TX=GPIO17 RX=GPIO16 19200 baud");
+    ESP_LOGI(TAG, "DM Fan v3.0.0 — TX=GPIO17 RX=GPIO16 19200 baud");
     this->set_supported_preset_modes({"Direct Breeze", "Natural Breeze", "Smart Breeze"});
     auto restore = this->restore_state_();
     if (restore.has_value()) restore->apply(*this);
