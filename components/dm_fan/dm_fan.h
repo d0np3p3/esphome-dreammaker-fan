@@ -184,7 +184,11 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     t.set_oscillation(true);
     t.set_speed(true);
     t.set_supported_speed_count(100);
-    t.set_supported_preset_modes({"Direct Breeze", "Natural Breeze", "Smart Breeze"});
+    // Wire the entity's preset modes (registered in setup() via
+    // set_supported_preset_modes) into the fresh traits. This is the
+    // non-deprecated replacement for FanTraits::set_supported_preset_modes()
+    // and keeps the presets visible in the Home Assistant fan card.
+    this->wire_preset_modes_(t);
     return t;
   }
 
