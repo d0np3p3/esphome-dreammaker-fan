@@ -1,4 +1,4 @@
-no# ESPHome DreamMaker Fan Component
+# ESPHome DreamMaker Fan Component
 
 **v2.2** — Native UART integration for Zeico / DreamMaker Smart Fan (DM-FAN01 / DM-FAN02-W)  
 Fully local, no cloud, no Tuya — works 100% offline via Home Assistant.
@@ -13,7 +13,7 @@ Fully local, no cloud, no Tuya — works 100% offline via Home Assistant.
 |---------|--------|
 | Power ON/OFF | ✅ |
 | Speed 1–100% | ✅ |
-| Mode: Direct / Natural / Smart | ✅ |
+| Mode: Direct / Natural / Smart (fan preset, syncs from MCU) | ✅ |
 | Oscillation ON/OFF | ✅ |
 | Oscillation Angle (30°/60°/90°/120°/140°) | ✅ |
 | Timer 0–8h (1h steps) | ✅ |
@@ -177,19 +177,20 @@ Without response → MCU pulls EN pin LOW → POWERON_RESET after ~4 minutes.
 
 ## Known Limitations
 
-**Mode Select not synced from MCU:** When the fan MCU pushes a state frame (e.g. after a physical button press), the ESPHome `fan` entity (power, speed, oscillation) updates automatically. However, the `Modus` template select in HA does **not** update, because ESPHome template selects have no C++ API for programmatic state updates from a custom component. The actual mode is tracked internally and sent correctly on the next command — it is only the HA display that may lag behind until the user changes the mode via HA.
-
 **Rotate buttons unconfirmed:** `RES_ROTATE (0x05)` was derived from the firmware binary, not from live UART captures.
 
 ---
 
 ## Changelog
 
-### v2.2 (2026-05-23) — First working release
-- **Baudrate confirmed: 19200** (was assumed 9600)
-- **WiFi-Response corrected:** `action:82, resource:0x78, 59 bytes` (was wrong action/resource)
-- **Boot-Init added:** ESP sends `action:2, resource:0x232A` on startup to sync MCU state
-- **MCU command ACK:** `action:1` frames (0x238D reset, 0x1F44 provisioning) are ACKed and ignored instead of causing reboot
+### v2.2 (2026-05-29)
+- **Speed slider fixed:** `t.set_speed(true)` was missing from `get_traits()` — HA fan card now shows speed percentage slider
+- **Mode now a fan preset:** mode moved from template select to `FanTraits::set_supported_preset_modes` — syncs from MCU physical buttons, visible in HA fan card
+- **`parse_buf_` enlarged to 160 bytes** — handles large MCU boot-state responses
+- Baudrate confirmed: 19200
+- WiFi-Response corrected: `action:82, resource:0x78, 59 bytes`
+- Boot-Init added: ESP sends `action:2, resource:0x232A` on startup
+- MCU command ACK for 0x238D / 0x1F44
 - All features live-tested on real hardware
 
 ### v2.1
