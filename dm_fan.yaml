@@ -72,24 +72,9 @@ fan:
       name: "Luftfeuchtigkeit"
       entity_category: diagnostic
 
-# ── Selects: Mode + Angle ─────────────────────────────────────────────────────
+# ── Selects: Winkel ──────────────────────────────────────────────────────────
+# Note: Mode (Direct/Natural/Smart) is now a fan preset — visible in the HA fan card.
 select:
-  - platform: template
-    name: "Modus"
-    icon: "mdi:leaf"
-    optimistic: true
-    initial_option: "Direct Breeze"
-    options:
-      - "Direct Breeze"
-      - "Natural Breeze"
-      - "Smart Breeze"
-    set_action:
-      lambda: |-
-        uint8_t mode = 0;
-        if (x == "Natural Breeze") mode = 1;
-        if (x == "Smart Breeze")   mode = 2;
-        id(my_fan)->set_mode(mode);
-
   - platform: template
     name: "Oszillationswinkel"
     icon: "mdi:angle-obtuse"

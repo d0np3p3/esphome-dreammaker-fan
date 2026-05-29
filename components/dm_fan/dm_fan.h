@@ -6,6 +6,7 @@
 #include "esphome/components/fan/fan.h"
 #include "esphome/components/sensor/sensor.h"
 #include <algorithm>
+#include <set>
 #include <string>
 
 namespace esphome {
@@ -179,7 +180,9 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   fan::FanTraits get_traits() override {
     fan::FanTraits t;
     t.set_oscillation(true);
+    t.set_speed(true);
     t.set_supported_speed_count(100);
+    t.set_supported_preset_modes({"Direct Breeze", "Natural Breeze", "Smart Breeze"});
     return t;
   }
 
@@ -226,6 +229,14 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     if (call.get_oscillating().has_value()) {
       desired_.oscillation = *call.get_oscillating();
       send_cmd_bool_(RES_OSC_ONOFF, desired_.oscillation);
+    }
+    if (call.get_preset_mode().has_value()) {
+      const auto &pm = *call.get_preset_mode();
+      uint8_t mode = 0;
+      if (pm == "Natural Breeze")    mode = 1;
+      else if (pm == "Smart Breeze") mode = 2;
+      desired_.mode = mode;
+      send_cmd_byte_(RES_MODE, desired_.mode);
     }
   }
 
@@ -422,6 +433,9 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     if (n != hw_state_) {
       hw_state_ = n;
       desired_  = hw_state_;
+      static const char *const MODE_NAMES[] = {
+        "Direct Breeze", "Natural Breeze", "Smart Breeze"};
+      this->preset_mode = n.mode < 3 ? MODE_NAMES[n.mode] : MODE_NAMES[0];
       this->state       = hw_state_.power;
       this->speed       = hw_state_.speed;
       this->oscillating = hw_state_.oscillation;

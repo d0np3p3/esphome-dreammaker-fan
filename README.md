@@ -40,7 +40,7 @@ was functionally correct; the comment is now explicit.
 |---------|--------|
 | Power ON/OFF | ✅ |
 | Speed 1–100% | ✅ |
-| Mode: Direct / Natural / Smart | ✅ |
+| Mode: Direct / Natural / Smart (fan preset, syncs from MCU) | ✅ |
 | Oscillation ON/OFF | ✅ |
 | Oscillation Angle (30°/60°/90°/120°/140°) | ✅ |
 | Timer 0–8h (1h steps) | ✅ |
@@ -95,18 +95,22 @@ a `RESET` button are exposed on the PCB for flashing.
 | RX | TXD |
 | GND | GND |
 
-> **Note:** Power the board from original fan power — do **not** connect motor power while flashing
+> **Note:** Power the board from original fan power — do **not** connect motor power while flashing (two connectors)
 
 ### Procedure
 
 1. Connect the adapter as above.
-2. Bridge **MCU RST to GND** — holds the fan MCU in reset so it cannot interfere with flashing.
-3. Bridge the **BOOT** pad to **GND** → ESP32 enters flash mode.
-4. Bridge **RESET** briefly — ESP32 boots into download mode.
+2. Bridge **MCU RST to GND** — there is a 5-pin header next to the ROHS label on the board; Reset and GND are among those five pins. This holds the fan MCU in reset so it cannot send data while the flash UART is busy. Without this the MCU resets the ESP32 every 5–10 min.
+3. Bridge the **BOOT** pad to **GND** (pulls GPIO0 low → ESP32 enters flash mode). BOOT is located next to the UART pads.
+4. Bridge **RESET** briefly — the ESP32 boots into flash mode ("waiting for download" in serial).
 5. Remove the BOOT–GND bridge.
-6. Flash. **Make a backup first** (`esptool.py read_flash 0x0 0x400000 backup.bin`).
-7. Remove the MCU RST–GND bridge — fan MCU resumes.
-8. Subsequent updates via OTA.
+6. Flash via esptool, ESPWeb Tool, or your preferred tool. **Make a backup first.**
+7. Remove the MCU RST–GND bridge — the fan MCU resumes normal operation.
+8. After the first flash, subsequent updates can be done wirelessly via OTA.
+
+## ESP32 ↔ Fan MCU communication (internal, no wiring needed)
+
+After flashing, the ESP32 talks to the fan MCU over an **internal UART already wired on the PCB** — GPIO17 (TX) and GPIO16 (RX). No external cables are required for this.
 
 ---
 
@@ -204,12 +208,7 @@ Timer: len=0x0D, sub_len=04, uint16 BE minutes
 
 ## Known Limitations
 
-**Mode Select not synced from MCU:** ESPHome template selects have no C++ API for
-programmatic state updates from a custom component. The mode is tracked internally
-and sent correctly — only the HA display may lag until the user changes mode via HA.
-
-**Rotate buttons unconfirmed:** `RES_ROTATE (0x05)` was derived from the firmware
-binary, not from live UART captures.
+**Rotate buttons unconfirmed:** `RES_ROTATE (0x05)` was derived from the firmware binary, not from live UART captures.
 
 ---
 
@@ -220,12 +219,15 @@ binary, not from live UART captures.
   query, Stage 3 only on subsequent queries — matches original firmware behaviour
   confirmed from hardware UART capture
 - `build_cmd_header_()` comment clarified (f[12] caller responsibility documented)
-- TAG updated to `dm_fan.v3.0`
+- TAG updated to `dm_fan.v3.0.0-beta`
 
-### v2.2 (2026-05-23)
+### v2.2 (2026-05-29)
+- **Speed slider fixed:** `t.set_speed(true)` was missing — HA fan card now shows speed percentage slider
+- **Mode now a fan preset:** syncs from MCU physical buttons, visible in HA fan card
+- **`parse_buf_` enlarged to 160 bytes** — handles large MCU boot-state responses
 - Baudrate confirmed: 19200
-- WiFi response corrected: action:82, resource:0x78, 59 bytes
-- Boot-Init added
+- WiFi-Response corrected: action:82, resource:0x78, 59 bytes
+- Boot-Init added: ESP sends action:2, resource:0x232A on startup
 - MCU command ACK for 0x238D / 0x1F44
 - All features live-tested on real hardware
 
@@ -242,10 +244,11 @@ binary, not from live UART captures.
 
 ## Credits
 
-Reverse engineered by **d0np3p3** with AI assistance (Claude + Gemini).
+Reverse engineered by **d0np3p3** with AI assistance (Claude + Gemini).  
+Protocol analysis from original firmware UART logs, BLE snoop captures, and NVS dumps.
 
 ### Special thanks
 
 - **[@BobeOlsen](https://github.com/BobeOlsen)** — early research and hardware exploration
-- **[@hbgcreag](https://github.com/hbgcreaghaht)** — protocol contributions
-- **[@dhewg](https://github.com/dhewg)** and the **[esphome-miot](https://github.com/dhewg/esphome-miot/issues/50)** community — foundational protocol work
+- **[@hbgcreag](https://github.com/hbgcreaghaht)** — contributions to protocol understanding  
+- **[@dhewg](https://github.com/dhewg)** and the **[esphome-miot](https://github.com/dhewg/esphome-miot/issues/50)** community — foundational work on Zeico/DreamMaker UART protocol, without which this project would not have been possible
