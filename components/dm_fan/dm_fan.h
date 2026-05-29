@@ -11,7 +11,7 @@
 namespace esphome {
 namespace dm_fan {
 
-static const char *const TAG = "dm_fan.v2.1";
+static const char *const TAG = "dm_fan.v2.2";
 
 // ── Protocol constants ────────────────────────────────────────────────────────
 // FA CE magic also in BLE provisioning finish: FA CE AA 00
