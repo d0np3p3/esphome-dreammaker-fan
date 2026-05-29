@@ -244,6 +244,16 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
       desired_.mode = mode;
       send_cmd_byte_(RES_MODE, desired_.mode);
     }
+
+    // Optimistically reflect the command in HA right away. The MCU echo
+    // arrives ~40 ms later and is swallowed by the 300 ms anti-flap lock,
+    // so without this push HA would never see power/speed/mode/oscillation
+    // changes triggered from the fan card.
+    this->state       = desired_.power;
+    this->speed       = desired_.speed;
+    this->oscillating = desired_.oscillation;
+    this->set_preset_mode_(preset_name_(desired_.mode));
+    this->publish_state();
   }
 
   // ── Public API — callable from YAML lambdas ───────────────────────────────
@@ -293,6 +303,13 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     if (m == 1) return "natural";
     if (m == 2) return "smart";
     return "direct";
+  }
+
+  // Preset-mode label as registered via set_supported_preset_modes().
+  static const char *preset_name_(uint8_t m) {
+    if (m == 1) return "Natural Breeze";
+    if (m == 2) return "Smart Breeze";
+    return "Direct Breeze";
   }
 
   // ── State machine parser ──────────────────────────────────────────────────
@@ -439,9 +456,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     if (n != hw_state_) {
       hw_state_ = n;
       desired_  = hw_state_;
-      static const char *const MODE_NAMES[] = {
-        "Direct Breeze", "Natural Breeze", "Smart Breeze"};
-      this->set_preset_mode_(n.mode < 3 ? MODE_NAMES[n.mode] : MODE_NAMES[0]);
+      this->set_preset_mode_(preset_name_(n.mode));
       this->state       = hw_state_.power;
       this->speed       = hw_state_.speed;
       this->oscillating = hw_state_.oscillation;
