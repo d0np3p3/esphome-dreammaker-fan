@@ -156,6 +156,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
  public:
   void set_temperature_sensor(sensor::Sensor *s) { temperature_ = s; }
   void set_humidity_sensor(sensor::Sensor *s)    { humidity_ = s; }
+  void set_log_raw_frames(bool v)                { log_raw_frames_ = v; }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   void setup() override {
@@ -298,6 +299,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
 
   sensor::Sensor *temperature_{nullptr};
   sensor::Sensor *humidity_{nullptr};
+  bool log_raw_frames_{false};
 
   static const char *mode_name_(uint8_t m) {
     if (m == 1) return "natural";
@@ -351,6 +353,16 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
         if (parse_idx_ >= parse_len_) parse_st_ = ParseState::CHECKSUM;
         break;
       case ParseState::CHECKSUM: {
+        if (log_raw_frames_) {
+          // Format: "FA CE len_hi len_lo payload... checksum"
+          char hex[512];
+          int pos = snprintf(hex, sizeof(hex), "FA CE %02X %02X",
+                             (uint8_t)(parse_len_ >> 8), (uint8_t)(parse_len_ & 0xFF));
+          for (uint16_t i = 0; i < parse_len_ && pos < (int)sizeof(hex) - 4; i++)
+            pos += snprintf(hex + pos, sizeof(hex) - pos, " %02X", parse_buf_[i]);
+          snprintf(hex + pos, sizeof(hex) - pos, " %02X", b);
+          ESP_LOGD(TAG, "RX raw [len=%u]: %s", parse_len_, hex);
+        }
         // Checksum = sum of ALL bytes (magic + length + payload) mod 256
         uint8_t chk = MAGIC_0 + MAGIC_1
                     + (uint8_t)(parse_len_ >> 8)

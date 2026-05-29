@@ -21,12 +21,14 @@ AUTO_LOAD = ["sensor", "fan"]
 
 DmFan = dm_fan_ns.class_("DmFan", fan.Fan, cg.Component, uart.UARTDevice)
 
-CONF_UART_ID     = "uart_id"
-CONF_TEMPERATURE = "temperature"
-CONF_HUMIDITY    = "humidity"
+CONF_UART_ID        = "uart_id"
+CONF_TEMPERATURE    = "temperature"
+CONF_HUMIDITY       = "humidity"
+CONF_LOG_RAW_FRAMES = "log_raw_frames"
 
 CONFIG_SCHEMA = fan.fan_schema(DmFan).extend({
     cv.Required(CONF_UART_ID): cv.use_id(uart.UARTComponent),
+    cv.Optional(CONF_LOG_RAW_FRAMES, default=False): cv.boolean,
     cv.Optional(CONF_TEMPERATURE): sensor.sensor_schema(
         unit_of_measurement=UNIT_CELSIUS,
         device_class=DEVICE_CLASS_TEMPERATURE,
@@ -49,6 +51,8 @@ async def to_code(config):
     await cg.register_component(var, config)
     await uart.register_uart_device(var, config)
     await fan.register_fan(var, config)
+
+    cg.add(var.set_log_raw_frames(config[CONF_LOG_RAW_FRAMES]))
 
     if temp_conf := config.get(CONF_TEMPERATURE):
         sens = await sensor.new_sensor(temp_conf)

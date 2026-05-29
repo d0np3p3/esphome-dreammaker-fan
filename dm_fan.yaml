@@ -65,6 +65,7 @@ fan:
     id: my_fan
     name: "DM Fan"
     uart_id: uart_bus
+    # log_raw_frames: true   # uncomment to dump every MCU frame as hex at DEBUG level
     temperature:
       name: "Temperatur"
       entity_category: diagnostic
