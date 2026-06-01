@@ -4,7 +4,7 @@ v4.0 — MCU version readout, boot response parsing
 """
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import fan, uart, sensor, text_sensor
+from esphome.components import fan, uart, sensor, text_sensor, esp32_ble_tracker
 from esphome.const import (
     CONF_ID,
     DEVICE_CLASS_TEMPERATURE,
@@ -21,15 +21,22 @@ AUTO_LOAD = ["sensor", "text_sensor", "fan"]
 
 DmFan = dm_fan_ns.class_("DmFan", fan.Fan, cg.Component, uart.UARTDevice)
 
-CONF_UART_ID        = "uart_id"
-CONF_TEMPERATURE    = "temperature"
-CONF_HUMIDITY       = "humidity"
-CONF_MCU_VERSION    = "mcu_version"
-CONF_LOG_RAW_FRAMES = "log_raw_frames"
+CONF_UART_ID          = "uart_id"
+CONF_TEMPERATURE      = "temperature"
+CONF_HUMIDITY         = "humidity"
+CONF_MCU_VERSION      = "mcu_version"
+CONF_LOG_RAW_FRAMES   = "log_raw_frames"
+CONF_BLE_REMOTE       = "ble_remote"
+CONF_BLE_REPORT_TO_MCU = "ble_report_to_mcu"
 
 CONFIG_SCHEMA = fan.fan_schema(DmFan).extend({
     cv.Required(CONF_UART_ID): cv.use_id(uart.UARTComponent),
     cv.Optional(CONF_LOG_RAW_FRAMES, default=False): cv.boolean,
+    # BLE remote (Phase 1: receive + decode + log). Requires a BLE tracker in the
+    # config (bluetooth_proxy or esp32_ble_tracker). ble_report_to_mcu is the
+    # experimental UART forward to the MCU (resource 0x1F41) — off by default.
+    cv.Optional(CONF_BLE_REMOTE, default=False): cv.boolean,
+    cv.Optional(CONF_BLE_REPORT_TO_MCU, default=False): cv.boolean,
     cv.Optional(CONF_MCU_VERSION): text_sensor.text_sensor_schema(
         entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
         icon="mdi:chip",
@@ -48,7 +55,7 @@ CONFIG_SCHEMA = fan.fan_schema(DmFan).extend({
         accuracy_decimals=0,
         entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
     ),
-}).extend(cv.COMPONENT_SCHEMA)
+}).extend(esp32_ble_tracker.ESP_BLE_DEVICE_SCHEMA).extend(cv.COMPONENT_SCHEMA)
 
 
 async def to_code(config):
@@ -70,3 +77,9 @@ async def to_code(config):
     if humi_conf := config.get(CONF_HUMIDITY):
         sens = await sensor.new_sensor(humi_conf)
         cg.add(var.set_humidity_sensor(sens))
+
+    if config[CONF_BLE_REMOTE]:
+        cg.add(var.set_ble_remote(True))
+        cg.add(var.set_ble_report_to_mcu(config[CONF_BLE_REPORT_TO_MCU]))
+        # Register as a BLE advertisement listener on the tracker hub.
+        await esp32_ble_tracker.register_ble_device(var, config)

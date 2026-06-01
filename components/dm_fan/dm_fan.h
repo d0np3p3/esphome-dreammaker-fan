@@ -6,6 +6,9 @@
 #include "esphome/components/fan/fan.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/text_sensor/text_sensor.h"
+#ifdef USE_ESP32_BLE_TRACKER
+#include "esphome/components/esp32_ble_tracker/esp32_ble_tracker.h"
+#endif
 #include <algorithm>
 #include <cstring>
 #include <set>
@@ -22,6 +25,9 @@ constexpr uint8_t MAGIC_1   = 0xCE;
 constexpr uint8_t CMD_STATE = 0x84;  // MCU→ESP full state push (RX)
 constexpr uint8_t CMD_SET   = 0x04;  // ESP→MCU single-property command (TX)
 constexpr uint8_t CMD_QUERY = 0x02;  // MCU→ESP WiFi status query
+
+// BLE remote beacon — manufacturer-specific advertisement, company ID 0x4D44 ("DM")
+constexpr uint16_t BLE_COMPANY_DM = 0x4D44;  // little-endian "DM" = DreamMaker
 
 // Resource IDs for CMD_SET — confirmed from 31 TX captures
 constexpr uint8_t RES_POWER     = 0x00;
@@ -153,12 +159,18 @@ struct FanState {
 };
 
 // ── Main component ────────────────────────────────────────────────────────────
-class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
+class DmFan : public fan::Fan, public Component, public uart::UARTDevice
+#ifdef USE_ESP32_BLE_TRACKER
+            , public esp32_ble_tracker::ESPBTDeviceListener
+#endif
+{
  public:
   void set_temperature_sensor(sensor::Sensor *s)          { temperature_ = s; }
   void set_humidity_sensor(sensor::Sensor *s)              { humidity_ = s; }
   void set_mcu_version_sensor(text_sensor::TextSensor *s)  { mcu_version_ = s; }
   void set_log_raw_frames(bool v)                          { log_raw_frames_ = v; }
+  void set_ble_remote(bool v)                              { ble_remote_ = v; }
+  void set_ble_report_to_mcu(bool v)                       { ble_report_to_mcu_ = v; }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   void setup() override {
@@ -286,6 +298,35 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   bool     get_child_lock()  const { return desired_.child_lock; }
   float    get_timer_hours() const { return desired_.timer_min / 60.0f; }
 
+  // ── BLE remote beacon receiver (Phase 1) ───────────────────────────────────
+  // The DreamMaker remote (and the fan itself in original firmware) advertises a
+  // manufacturer-specific BLE beacon with company ID 0x4D44 ("DM"). Layout of the
+  // manufacturer data AFTER the 2-byte company ID (which esp32_ble_tracker strips
+  // into the ServiceData uuid):
+  //   [0..1]  protocol version (observed 0x02 0x01)
+  //   [2..7]  device MAC (BLE byte order)
+  //   [8]     sequence counter (increments ~every 20 s / on activity)
+  //   [9]     status (0x01 = idle)
+  //   [10..]  payload (8 bytes, all-zero when idle — button data when active)
+  //
+  // This handler only DECODES and LOGS by default. Forwarding to the MCU over
+  // UART (resource 0x1F41) is gated behind set_ble_report_to_mcu() because the
+  // exact frame format is still being reverse-engineered and a malformed report
+  // can make the MCU reset the ESP.
+#ifdef USE_ESP32_BLE_TRACKER
+  bool parse_device(const esp32_ble_tracker::ESPBTDevice &device) override {
+    if (!ble_remote_) return false;
+    for (auto &md : device.get_manufacturer_datas()) {
+      auto uuid = md.uuid.get_uuid();
+      if (uuid.len != ESP_UUID_LEN_16) continue;
+      if (uuid.uuid.uuid16 != BLE_COMPANY_DM) continue;
+      on_dm_beacon_(device, md.data);
+      return true;
+    }
+    return false;
+  }
+#endif
+
  protected:
   FanState desired_;
   FanState hw_state_;
@@ -306,6 +347,14 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   sensor::Sensor *humidity_{nullptr};
   text_sensor::TextSensor *mcu_version_{nullptr};
   bool log_raw_frames_{false};
+
+  // BLE remote beacon state
+  bool    ble_remote_{false};
+  bool    ble_report_to_mcu_{false};
+  bool    ble_have_last_{false};
+  uint8_t ble_last_counter_{0};
+  uint8_t ble_last_status_{0};
+  uint8_t ble_last_payload_[8]{};
 
   static const char *mode_name_(uint8_t m) {
     if (m == 1) return "natural";
@@ -603,6 +652,69 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     f[17] = checksum_(f, 17);
     write_array(f, 18);
     ESP_LOGD(TAG, "TX: res=0x%02X val=%u min ctr=%u", resource, value, msg_counter_ - 1);
+  }
+
+  // ── BLE beacon → decode + log (+ optional MCU report) ──────────────────────
+#ifdef USE_ESP32_BLE_TRACKER
+  void on_dm_beacon_(const esp32_ble_tracker::ESPBTDevice &device,
+                     const std::vector<uint8_t> &d) {
+    // d = manufacturer data after the 2-byte company ID. Need at least
+    // proto(2) + mac(6) + counter(1) + status(1) = 10 bytes.
+    if (d.size() < 10) {
+      ESP_LOGD(TAG, "DM beacon from %s too short (%u bytes)",
+               device.address_str().c_str(), (unsigned) d.size());
+      return;
+    }
+    uint16_t proto   = ((uint16_t) d[0] << 8) | d[1];
+    uint8_t  counter = d[8];
+    uint8_t  status  = d[9];
+
+    uint8_t payload[8] = {};
+    size_t  pn = std::min<size_t>(8, d.size() - 10);
+    for (size_t i = 0; i < pn; i++) payload[i] = d[10 + i];
+
+    char phex[3 * 8 + 1] = {};
+    int  pos = 0;
+    for (size_t i = 0; i < 8; i++)
+      pos += snprintf(phex + pos, sizeof(phex) - pos, "%02X ", payload[i]);
+
+    // Highlight changes — a changed counter/status/payload is the interesting
+    // event (button press), a repeated idle beacon is just the ~20 s heartbeat.
+    bool changed = !ble_have_last_ || counter != ble_last_counter_ ||
+                   status != ble_last_status_ ||
+                   memcmp(payload, ble_last_payload_, 8) != 0;
+
+    if (changed) {
+      ESP_LOGI(TAG,
+        "DM remote beacon %s proto=0x%04X ctr=%u status=0x%02X payload=[ %s]",
+        device.address_str().c_str(), proto, counter, status, phex);
+    } else {
+      ESP_LOGD(TAG, "DM remote beacon %s (idle heartbeat, ctr=%u)",
+               device.address_str().c_str(), counter);
+    }
+
+    ble_have_last_   = true;
+    ble_last_counter_ = counter;
+    ble_last_status_  = status;
+    memcpy(ble_last_payload_, payload, 8);
+
+    // Optional, experimental: forward the beacon to the MCU (resource 0x1F41).
+    if (ble_report_to_mcu_ && changed)
+      report_beacon_to_mcu_(counter, payload);
+  }
+#endif
+
+  // EXPERIMENTAL — frame format reverse-engineered, not yet confirmed on hardware.
+  // FA CE 00 0C | 02 1F 41 | [counter] | [8-byte payload] | [chk]
+  void report_beacon_to_mcu_(uint8_t counter, const uint8_t *payload8) {
+    uint8_t f[17];
+    f[0] = MAGIC_0; f[1] = MAGIC_1; f[2] = 0x00; f[3] = 0x0C;
+    f[4] = 0x02;    f[5] = 0x1F;    f[6] = 0x41;
+    f[7] = counter;
+    for (int i = 0; i < 8; i++) f[8 + i] = payload8[i];
+    f[16] = checksum_(f, 16);
+    write_array(f, 17);
+    ESP_LOGD(TAG, "BLE→MCU report (res=0x1F41 ctr=%u) — EXPERIMENTAL", counter);
   }
 };
 

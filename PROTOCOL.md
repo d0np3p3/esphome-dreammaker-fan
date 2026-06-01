@@ -119,3 +119,57 @@ Timer: len=0x0D, sub_len=04, uint16 BE minutes
 |----------|---------|-----------------|
 | 0x238D | Reset ESP | ACK `action:81` + ignore |
 | 0x1F44 | Start WiFi provisioning | ACK `action:81` + ignore |
+
+---
+
+## BLE remote (Phase 1 — receive + decode, v4.0.0-beta)
+
+The DreamMaker remote uses a **DA14580** BLE chip and advertises a
+manufacturer-specific beacon with company ID **`0x4D44` ("DM")** — fully
+proprietary, not Tuya/Xiaomi/Zigbee.
+
+### Advertisement manufacturer data
+
+After the 2-byte company ID (which `esp32_ble_tracker` strips into the
+ServiceData UUID), the manufacturer data is:
+
+| Offset | Bytes | Field | Notes |
+|--------|-------|-------|-------|
+| 0–1 | `02 01` | Protocol version | observed 2.1 |
+| 2–7 | 6 | Device MAC | BLE byte order |
+| 8 | 1 | **Sequence counter** | increments ~every 20 s / on activity |
+| 9 | 1 | Status | `0x01` = idle |
+| 10–17 | 8 | Payload | all-zero when idle; button data when active |
+
+Captured 2026-06-01 (idle): `4B:F2:7E:47:E5:6E`, company `DM`,
+`02 01 4B F2 7E 47 E5 6E 0B 01 00 00 00 00 00 00 00 00`.
+
+The `dm_fan` component decodes this when `ble_remote: true` and logs every
+beacon. Changed counter/status/payload → `INFO` (button event), repeated idle
+heartbeat → `DEBUG`. **Button-to-payload mapping is not yet known** — flash
+v4.0.0-beta, press remote buttons, and compare the logged `payload=[...]`.
+
+### UART forward to MCU — resource `0x1F41` (EXPERIMENTAL, unconfirmed)
+
+In the original firmware the ESP forwards the beacon to the MCU:
+
+```
+ESP→MCU (action:2): FA CE 00 0C 02 1F 41 [counter] [8-byte payload] [chk]
+MCU→ESP (action:82): FA CE 00 0A 82 1F 41 ... 01 [chk]   (ACK, value 0x01)
+```
+
+> ⚠️ Frame length/format reverse-engineered, **not yet confirmed on hardware**.
+> `BLE->mcu report timeout!` after 2 failures triggers `SW_CPU_RESET` (0x238D).
+> Gated behind `ble_report_to_mcu: true`, **off by default**.
+
+### Resource table additions
+
+| Resource | Action | Direction | Meaning |
+|----------|--------|-----------|---------|
+| 0x1F41 | 2/82 | ESP↔MCU | BLE remote beacon / pairing |
+
+### Blockers for full button support
+
+1. **beaconkey** (NVS `ble_key`) — needed to decrypt the payload (AES-128 suspected)
+2. Encryption algorithm + key-derivation — unconfirmed
+3. Button → byte mapping — gather via Phase 1 logs

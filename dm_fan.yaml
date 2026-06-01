@@ -75,6 +75,14 @@ fan:
     name: "DM Fan"
     uart_id: uart_bus
     # log_raw_frames: true   # uncomment to dump every MCU frame as hex at DEBUG level
+    # ── BLE remote (Phase 1: receive + decode + log) ───────────────────────────
+    # Needs a BLE tracker in the config — bluetooth_proxy below provides one.
+    # Press remote buttons and watch the log for "DM remote beacon ... payload=[...]"
+    # to map which payload bytes change per button.
+    ble_remote: true
+    # ble_report_to_mcu: true  # EXPERIMENTAL — forwards beacon to MCU (res 0x1F41).
+                               # Leave OFF until the frame format is confirmed; a
+                               # malformed report can make the MCU reset the ESP.
     mcu_version:
       name: "MCU Version"
       entity_category: diagnostic
