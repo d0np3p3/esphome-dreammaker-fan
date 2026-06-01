@@ -41,6 +41,9 @@ wifi:
 
 captive_portal:
 
+bluetooth_proxy:
+  active: false  # true = BLE connections (e.g. Xiaomi thermometers), false = scan only
+
 # ── External component ────────────────────────────────────────────────────────
 external_components:
   - source:
