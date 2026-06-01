@@ -290,7 +290,10 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   FanState desired_;
   FanState hw_state_;
 
-  // Anti-flap: rollover-safe 300 ms lock after any HA→MCU command
+  // Anti-flap: short guard against a stale spontaneous frame arriving right
+  // after a HA command. Only applies to counter==0 frames now (our own command
+  // echoes are identified by their non-zero echo counter). Rollover-safe.
+  static constexpr uint32_t STALE_GUARD_MS = 250;
   uint32_t last_control_time_ = 0;
 
   // WiFi 3-stage handshake state
@@ -474,12 +477,14 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
 
   // ── MCU state report → HA ─────────────────────────────────────────────────
   void on_state_frame_() {
-    // Anti-flap: ignore MCU echo during 300 ms after a HA command.
-    // uint32 subtraction is rollover-safe — no 49-day freeze bug.
-    if (millis() - last_control_time_ < 300) {
-      ESP_LOGD(TAG, "Anti-flap lock active — skipping HA update");
-      return;
-    }
+    // Echo counter (frame bytes [3-6] / payload offset 3-6, uint32 BE).
+    // Non-zero = the MCU is echoing a command WE sent (only the ESP issues
+    // commands, so any non-zero value is necessarily our own echo).
+    // Zero = a spontaneous change (physical button or periodic report).
+    uint32_t echo = ((uint32_t)parse_buf_[3] << 24) |
+                    ((uint32_t)parse_buf_[4] << 16) |
+                    ((uint32_t)parse_buf_[5] <<  8) |
+                     (uint32_t)parse_buf_[6];
 
     FanState n;
     n.power       = parse_buf_[rx::POWER] != 0;
@@ -505,17 +510,34 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
 
     ESP_LOGI(TAG,
       "MCU: pwr=%d spd=%d%% mode=%s osc=%d angle=%d° tmr=%dmin "
-      "snd=%d led=%d lock=%d temp=%.1f°C hum=%.1f%%",
+      "snd=%d led=%d lock=%d temp=%.1f°C hum=%.1f%% echo=%u",
       n.power, n.speed, mode_name_(n.mode), n.oscillation,
       byte_to_angle(n.roll_angle), n.timer_min,
-      n.sound, n.led, n.child_lock, temp, hum
+      n.sound, n.led, n.child_lock, temp, hum, echo
     );
 
-    // Plausibility-checked sensor publish
+    // Sensors always publish — temp/hum are independent of fan-state flap handling.
     if (temperature_ && temp > -10.0f && temp < 60.0f)
       temperature_->publish_state(temp);
     if (humidity_ && hum >= 0.0f && hum <= 100.0f)
       humidity_->publish_state(hum);
+
+    // ── Flap suppression (counter-aware, replaces the old 300 ms blanket lock) ──
+    // 1. Our own command echo (counter != 0): the final desired state was already
+    //    pushed to HA optimistically in control(). A multi-command batch echoes
+    //    each step with intermediate states, so publishing them would flap HA.
+    if (echo != 0) {
+      ESP_LOGD(TAG, "Echo of our cmd (ctr=%u) — HA already updated optimistically", echo);
+      return;
+    }
+    // 2. Spontaneous frame (counter 0) arriving right after our command may be a
+    //    stale pre-command report. A short guard window prevents a flash of the
+    //    old value before our optimistic state settles. Physical button presses
+    //    outside this window are reflected immediately (no blanket 300 ms block).
+    if (millis() - last_control_time_ < STALE_GUARD_MS) {
+      ESP_LOGD(TAG, "Spontaneous frame within %u ms guard — skipping (stale?)", STALE_GUARD_MS);
+      return;
+    }
 
     if (n != hw_state_) {
       hw_state_ = n;
