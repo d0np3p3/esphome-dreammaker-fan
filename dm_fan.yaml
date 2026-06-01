@@ -18,6 +18,8 @@ esp32:
   board: esp32dev
   framework:
     type: esp-idf
+    advanced:
+      sram1_as_iram: true  # +40 KB IRAM, eliminates bootloader warning
 
 logger:
   level: DEBUG
@@ -136,6 +138,19 @@ switch:
     optimistic: true
     turn_on_action:  { lambda: "id(my_fan)->set_sound(true);" }
     turn_off_action: { lambda: "id(my_fan)->set_sound(false);" }
+
+# ── Diagnostic sensors ───────────────────────────────────────────────────────
+sensor:
+  - platform: uptime
+    name: "Uptime"
+    icon: "mdi:timer-outline"
+    entity_category: diagnostic
+
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    icon: "mdi:wifi"
+    update_interval: 60s
+    entity_category: diagnostic
 
 # ── Buttons: Rotate left / right ─────────────────────────────────────────────
 button:
