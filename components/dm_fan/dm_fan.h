@@ -425,9 +425,9 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   }
 
   // ── Boot-state response (action:0x82, resource:0x232A) ───────────────────
-  // MCU responds to our boot-init request with 80 bytes of device state
-  // including version strings. We scan for the "fan_" ASCII marker to
-  // extract mcu_version (e.g. "fan_0001").
+  // MCU responds to our boot-init request with ~80 bytes of device state
+  // including version strings. We dump the full payload once for analysis
+  // and scan for the "fan_" ASCII marker to extract mcu_version (e.g. "fan_0001").
   void on_boot_response_() {
     uint16_t res = ((uint16_t)parse_buf_[1] << 8) | parse_buf_[2];
     if (res != 0x232A) {
@@ -435,6 +435,26 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
       return;
     }
     ESP_LOGI(TAG, "Boot state response received (len=%u)", parse_len_);
+
+    // Full hex dump (one-time, at boot) so the complete 80-byte payload is
+    // visible for protocol analysis — including any version strings beyond fan_.
+    {
+      char hex[3 * 160 + 1] = {};
+      int pos = 0;
+      for (uint16_t i = 0; i < parse_len_ && pos < (int)sizeof(hex) - 3; i++)
+        pos += snprintf(hex + pos, sizeof(hex) - pos, "%02X ", parse_buf_[i]);
+      ESP_LOGI(TAG, "Boot response full payload: %s", hex);
+
+      // ASCII view — printable chars only, '.' for the rest. Makes embedded
+      // version strings (dmiot_v1.1.0, v3.1.6, fan_0001) immediately readable.
+      char ascii[161] = {};
+      int apos = 0;
+      for (uint16_t i = 0; i < parse_len_ && apos < (int)sizeof(ascii) - 1; i++) {
+        uint8_t c = parse_buf_[i];
+        ascii[apos++] = (c >= 0x20 && c < 0x7F) ? (char) c : '.';
+      }
+      ESP_LOGI(TAG, "Boot response ASCII:   %s", ascii);
+    }
 
     // Scan payload for "fan_" ASCII prefix (0x66 0x61 0x6E 0x5F)
     for (uint16_t i = 0; i + 4 <= parse_len_; i++) {
@@ -448,12 +468,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
         return;
       }
     }
-    // "fan_" not found — publish raw hex of first 32 bytes for analysis
-    char hex[97] = {};
-    int pos = 0;
-    for (uint16_t i = 0; i < parse_len_ && i < 32 && pos < (int)sizeof(hex) - 3; i++)
-      pos += snprintf(hex + pos, sizeof(hex) - pos, "%02X ", parse_buf_[i]);
-    ESP_LOGW(TAG, "Boot response: 'fan_' marker not found. First bytes: %s", hex);
+    ESP_LOGW(TAG, "Boot response: 'fan_' marker not found — see ASCII dump above");
     if (mcu_version_) mcu_version_->publish_state("unknown");
   }
 

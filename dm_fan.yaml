@@ -13,6 +13,10 @@ esphome:
   project:
     name: "d0np3p3.dreammaker-fan"
     version: "4.0.0-beta"
+  on_boot:
+    priority: -100
+    then:
+      - lambda: 'id(esp_idf_version).publish_state(esp_get_idf_version());'
 
 esp32:
   board: esp32dev
@@ -157,6 +161,22 @@ sensor:
     icon: "mdi:wifi"
     update_interval: 60s
     entity_category: diagnostic
+
+# ── Version info (analog to original firmware version triple) ────────────────
+# Original reported: comm_version=dmiot_v1.1.0, rf_version=v3.1.6, mcu_version=fan_0001
+# Our equivalents:   ESPHome version,           ESP-IDF version,   MCU Version (from MCU)
+text_sensor:
+  - platform: version
+    name: "ESPHome Version"
+    icon: "mdi:package-up"
+    entity_category: diagnostic
+
+  - platform: template
+    name: "ESP-IDF Version"
+    id: esp_idf_version
+    icon: "mdi:chip"
+    entity_category: diagnostic
+    update_interval: never
 
 # ── Buttons: Rotate left / right ─────────────────────────────────────────────
 button:
