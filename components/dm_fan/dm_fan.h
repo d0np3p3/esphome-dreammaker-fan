@@ -5,6 +5,7 @@
 #include "esphome/components/uart/uart.h"
 #include "esphome/components/fan/fan.h"
 #include "esphome/components/sensor/sensor.h"
+#include "esphome/components/text_sensor/text_sensor.h"
 #include <algorithm>
 #include <cstring>
 #include <set>
@@ -13,7 +14,7 @@
 namespace esphome {
 namespace dm_fan {
 
-static const char *const TAG = "dm_fan.v3.0.0";
+static const char *const TAG = "dm_fan.v4.0.0-beta";
 
 // ── Protocol constants ────────────────────────────────────────────────────────
 constexpr uint8_t MAGIC_0   = 0xFA;
@@ -154,13 +155,14 @@ struct FanState {
 // ── Main component ────────────────────────────────────────────────────────────
 class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
  public:
-  void set_temperature_sensor(sensor::Sensor *s) { temperature_ = s; }
-  void set_humidity_sensor(sensor::Sensor *s)    { humidity_ = s; }
-  void set_log_raw_frames(bool v)                { log_raw_frames_ = v; }
+  void set_temperature_sensor(sensor::Sensor *s)          { temperature_ = s; }
+  void set_humidity_sensor(sensor::Sensor *s)              { humidity_ = s; }
+  void set_mcu_version_sensor(text_sensor::TextSensor *s)  { mcu_version_ = s; }
+  void set_log_raw_frames(bool v)                          { log_raw_frames_ = v; }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   void setup() override {
-    ESP_LOGI(TAG, "DM Fan v3.0.0 — TX=GPIO17 RX=GPIO16 19200 baud");
+    ESP_LOGI(TAG, "DM Fan v4.0.0-beta — TX=GPIO17 RX=GPIO16 19200 baud");
     this->set_supported_preset_modes({"Direct Breeze", "Natural Breeze", "Smart Breeze"});
     auto restore = this->restore_state_();
     if (restore.has_value()) restore->apply(*this);
@@ -299,6 +301,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
 
   sensor::Sensor *temperature_{nullptr};
   sensor::Sensor *humidity_{nullptr};
+  text_sensor::TextSensor *mcu_version_{nullptr};
   bool log_raw_frames_{false};
 
   static const char *mode_name_(uint8_t m) {
@@ -373,6 +376,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
           if      (cmd == CMD_QUERY && parse_len_ >= 9)  on_wifi_query_();
           else if (cmd == CMD_STATE && parse_len_ >= 36) on_state_frame_();
           else if (cmd == 0x01      && parse_len_ >= 3)  on_action1_(parse_buf_[1], parse_buf_[2]);
+          else if (cmd == 0x82      && parse_len_ >= 7)  on_boot_response_();
           else ESP_LOGD(TAG, "Unknown CMD=0x%02X len=%u", cmd, parse_len_);
         } else {
           ESP_LOGW(TAG, "Checksum error: got 0x%02X expected 0x%02X", b, chk);
@@ -418,6 +422,39 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     if      (res == 0x238D) ESP_LOGD(TAG, "MCU reset cmd (0x238D) → ACK, ignoring");
     else if (res == 0x1F44) ESP_LOGD(TAG, "MCU provisioning cmd (0x1F44) → ACK, ignoring");
     else                    ESP_LOGD(TAG, "MCU action:1 res=0x%04X → ACK", res);
+  }
+
+  // ── Boot-state response (action:0x82, resource:0x232A) ───────────────────
+  // MCU responds to our boot-init request with 80 bytes of device state
+  // including version strings. We scan for the "fan_" ASCII marker to
+  // extract mcu_version (e.g. "fan_0001").
+  void on_boot_response_() {
+    uint16_t res = ((uint16_t)parse_buf_[1] << 8) | parse_buf_[2];
+    if (res != 0x232A) {
+      ESP_LOGD(TAG, "Boot response resource=0x%04X len=%u — ignored", res, parse_len_);
+      return;
+    }
+    ESP_LOGI(TAG, "Boot state response received (len=%u)", parse_len_);
+
+    // Scan payload for "fan_" ASCII prefix (0x66 0x61 0x6E 0x5F)
+    for (uint16_t i = 0; i + 4 <= parse_len_; i++) {
+      if (parse_buf_[i]   == 0x66 && parse_buf_[i+1] == 0x61 &&
+          parse_buf_[i+2] == 0x6E && parse_buf_[i+3] == 0x5F) {
+        char ver[17] = {};
+        for (int j = 0; j < 16 && (i + j) < parse_len_ && parse_buf_[i + j] != 0x00; j++)
+          ver[j] = (char) parse_buf_[i + j];
+        ESP_LOGI(TAG, "MCU version: %s (offset %u)", ver, i);
+        if (mcu_version_) mcu_version_->publish_state(ver);
+        return;
+      }
+    }
+    // "fan_" not found — publish raw hex of first 32 bytes for analysis
+    char hex[97] = {};
+    int pos = 0;
+    for (uint16_t i = 0; i < parse_len_ && i < 32 && pos < (int)sizeof(hex) - 3; i++)
+      pos += snprintf(hex + pos, sizeof(hex) - pos, "%02X ", parse_buf_[i]);
+    ESP_LOGW(TAG, "Boot response: 'fan_' marker not found. First bytes: %s", hex);
+    if (mcu_version_) mcu_version_->publish_state("unknown");
   }
 
   // ── MCU state report → HA ─────────────────────────────────────────────────

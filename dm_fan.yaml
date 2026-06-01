@@ -1,5 +1,5 @@
 # DM Fan ESPHome Configuration
-# v3.0.0 — 3-stage WiFi handshake (non-blocking)
+# v4.0.0-beta — MCU version readout via boot response parsing
 
 substitutions:
   device_name: dreammaker-fan
@@ -12,7 +12,7 @@ esphome:
   min_version: "2026.4.5"
   project:
     name: "d0np3p3.dreammaker-fan"
-    version: "3.0.0"
+    version: "4.0.0-beta"
 
 esp32:
   board: esp32dev
@@ -49,7 +49,7 @@ external_components:
   - source:
       type: git
       url: https://github.com/d0np3p3/esphome-dreammaker-fan
-      ref: main
+      ref: v4.0.0-beta
     components: [dm_fan]
   # Local (for testing):
   # - source:
@@ -71,6 +71,9 @@ fan:
     name: "DM Fan"
     uart_id: uart_bus
     # log_raw_frames: true   # uncomment to dump every MCU frame as hex at DEBUG level
+    mcu_version:
+      name: "MCU Version"
+      entity_category: diagnostic
     temperature:
       name: "Temperatur"
       entity_category: diagnostic
