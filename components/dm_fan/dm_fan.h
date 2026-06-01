@@ -372,7 +372,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
           uint8_t cmd = parse_buf_[0];
           if      (cmd == CMD_QUERY && parse_len_ >= 9)  on_wifi_query_();
           else if (cmd == CMD_STATE && parse_len_ >= 36) on_state_frame_();
-          else if (cmd == 0x01)                          on_action1_(parse_buf_[1], parse_buf_[2]);
+          else if (cmd == 0x01      && parse_len_ >= 3)  on_action1_(parse_buf_[1], parse_buf_[2]);
           else ESP_LOGD(TAG, "Unknown CMD=0x%02X len=%u", cmd, parse_len_);
         } else {
           ESP_LOGW(TAG, "Checksum error: got 0x%02X expected 0x%02X", b, chk);
