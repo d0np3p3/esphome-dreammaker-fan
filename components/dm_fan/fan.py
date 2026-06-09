@@ -1,6 +1,6 @@
 """
 DM Fan — fan platform for ESPHome 2026.x
-v4.0 — MCU version readout, boot response parsing
+v4.0 — MCU version readout, boot response parsing, BLE remote beacon (Phase 1)
 """
 import esphome.codegen as cg
 import esphome.config_validation as cv
@@ -29,7 +29,7 @@ CONF_LOG_RAW_FRAMES   = "log_raw_frames"
 CONF_BLE_REMOTE       = "ble_remote"
 CONF_BLE_REPORT_TO_MCU = "ble_report_to_mcu"
 
-CONFIG_SCHEMA = fan.fan_schema(DmFan).extend({
+_BASE_SCHEMA = fan.fan_schema(DmFan).extend({
     cv.Required(CONF_UART_ID): cv.use_id(uart.UARTComponent),
     cv.Optional(CONF_LOG_RAW_FRAMES, default=False): cv.boolean,
     # BLE remote (Phase 1: receive + decode + log). Requires a BLE tracker in the
@@ -55,7 +55,21 @@ CONFIG_SCHEMA = fan.fan_schema(DmFan).extend({
         accuracy_decimals=0,
         entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
     ),
-}).extend(esp32_ble_tracker.ESP_BLE_DEVICE_SCHEMA).extend(cv.COMPONENT_SCHEMA)
+}).extend(cv.COMPONENT_SCHEMA)
+
+# The BLE tracker reference is only injected when ble_remote is enabled, so
+# configs without any bluetooth component keep validating (the tracker's
+# use_id would otherwise fail with "Couldn't find ID").
+_BLE_SCHEMA = _BASE_SCHEMA.extend(esp32_ble_tracker.ESP_BLE_DEVICE_SCHEMA)
+
+
+def _dm_fan_schema(config):
+    if isinstance(config, dict) and config.get(CONF_BLE_REMOTE):
+        return _BLE_SCHEMA(config)
+    return _BASE_SCHEMA(config)
+
+
+CONFIG_SCHEMA = _dm_fan_schema
 
 
 async def to_code(config):

@@ -6,12 +6,11 @@
 #include "esphome/components/fan/fan.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/text_sensor/text_sensor.h"
-#ifdef USE_ESP32_BLE_TRACKER
+#ifdef USE_ESP32_BLE_DEVICE
 #include "esphome/components/esp32_ble_tracker/esp32_ble_tracker.h"
 #endif
 #include <algorithm>
 #include <cstring>
-#include <set>
 #include <string>
 
 namespace esphome {
@@ -160,7 +159,7 @@ struct FanState {
 
 // ── Main component ────────────────────────────────────────────────────────────
 class DmFan : public fan::Fan, public Component, public uart::UARTDevice
-#ifdef USE_ESP32_BLE_TRACKER
+#ifdef USE_ESP32_BLE_DEVICE
             , public esp32_ble_tracker::ESPBTDeviceListener
 #endif
 {
@@ -313,13 +312,12 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
   // UART (resource 0x1F41) is gated behind set_ble_report_to_mcu() because the
   // exact frame format is still being reverse-engineered and a malformed report
   // can make the MCU reset the ESP.
-#ifdef USE_ESP32_BLE_TRACKER
+#ifdef USE_ESP32_BLE_DEVICE
   bool parse_device(const esp32_ble_tracker::ESPBTDevice &device) override {
     if (!ble_remote_) return false;
+    const auto dm_uuid = esp32_ble::ESPBTUUID::from_uint16(BLE_COMPANY_DM);
     for (auto &md : device.get_manufacturer_datas()) {
-      auto uuid = md.uuid.get_uuid();
-      if (uuid.len != ESP_UUID_LEN_16) continue;
-      if (uuid.uuid.uuid16 != BLE_COMPANY_DM) continue;
+      if (!(md.uuid == dm_uuid)) continue;
       on_dm_beacon_(device, md.data);
       return true;
     }
@@ -348,13 +346,16 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
   text_sensor::TextSensor *mcu_version_{nullptr};
   bool log_raw_frames_{false};
 
-  // BLE remote beacon state
+  // BLE remote beacon state. Payload length varies by sender: the remote
+  // advertises 8 bytes, the fan's own beacon (original firmware) 10.
+  static constexpr size_t BLE_PAYLOAD_MAX = 16;
   bool    ble_remote_{false};
   bool    ble_report_to_mcu_{false};
   bool    ble_have_last_{false};
   uint8_t ble_last_counter_{0};
   uint8_t ble_last_status_{0};
-  uint8_t ble_last_payload_[8]{};
+  uint8_t ble_last_payload_[BLE_PAYLOAD_MAX]{};
+  size_t  ble_last_payload_len_{0};
 
   static const char *mode_name_(uint8_t m) {
     if (m == 1) return "natural";
@@ -482,6 +483,12 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
   // and scan for the "fan_" ASCII marker to extract mcu_version (e.g. "fan_0001").
   void on_boot_response_() {
     uint16_t res = ((uint16_t)parse_buf_[1] << 8) | parse_buf_[2];
+    if (res == 0x1F41) {
+      // ACK for our experimental BLE→MCU beacon report. Seeing this confirms
+      // the reverse-engineered 0x1F41 frame format is accepted by the MCU.
+      ESP_LOGI(TAG, "MCU ACKed BLE report (action:82 res:0x1F41, len=%u)", parse_len_);
+      return;
+    }
     if (res != 0x232A) {
       ESP_LOGD(TAG, "Boot response resource=0x%04X len=%u — ignored", res, parse_len_);
       return;
@@ -576,6 +583,9 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
     //    pushed to HA optimistically in control(). A multi-command batch echoes
     //    each step with intermediate states, so publishing them would flap HA.
     if (echo != 0) {
+      // Keep the change-detection baseline current so the next spontaneous
+      // frame is not flagged as a (redundant) state change.
+      hw_state_ = n;
       ESP_LOGD(TAG, "Echo of our cmd (ctr=%u) — HA already updated optimistically", echo);
       return;
     }
@@ -655,7 +665,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
   }
 
   // ── BLE beacon → decode + log (+ optional MCU report) ──────────────────────
-#ifdef USE_ESP32_BLE_TRACKER
+#ifdef USE_ESP32_BLE_DEVICE
   void on_dm_beacon_(const esp32_ble_tracker::ESPBTDevice &device,
                      const std::vector<uint8_t> &d) {
     // d = manufacturer data after the 2-byte company ID. Need at least
@@ -669,34 +679,35 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
     uint8_t  counter = d[8];
     uint8_t  status  = d[9];
 
-    uint8_t payload[8] = {};
-    size_t  pn = std::min<size_t>(8, d.size() - 10);
+    uint8_t payload[BLE_PAYLOAD_MAX] = {};
+    size_t  pn = std::min(BLE_PAYLOAD_MAX, d.size() - 10);
     for (size_t i = 0; i < pn; i++) payload[i] = d[10 + i];
 
-    char phex[3 * 8 + 1] = {};
+    char phex[3 * BLE_PAYLOAD_MAX + 1] = {};
     int  pos = 0;
-    for (size_t i = 0; i < 8; i++)
+    for (size_t i = 0; i < pn; i++)
       pos += snprintf(phex + pos, sizeof(phex) - pos, "%02X ", payload[i]);
 
     // Highlight changes — a changed counter/status/payload is the interesting
     // event (button press), a repeated idle beacon is just the ~20 s heartbeat.
     bool changed = !ble_have_last_ || counter != ble_last_counter_ ||
-                   status != ble_last_status_ ||
-                   memcmp(payload, ble_last_payload_, 8) != 0;
+                   status != ble_last_status_ || pn != ble_last_payload_len_ ||
+                   memcmp(payload, ble_last_payload_, pn) != 0;
 
     if (changed) {
       ESP_LOGI(TAG,
-        "DM remote beacon %s proto=0x%04X ctr=%u status=0x%02X payload=[ %s]",
-        device.address_str().c_str(), proto, counter, status, phex);
+        "DM remote beacon %s proto=0x%04X ctr=%u status=0x%02X payload[%u]=[ %s]",
+        device.address_str().c_str(), proto, counter, status, (unsigned) pn, phex);
     } else {
       ESP_LOGD(TAG, "DM remote beacon %s (idle heartbeat, ctr=%u)",
                device.address_str().c_str(), counter);
     }
 
-    ble_have_last_   = true;
-    ble_last_counter_ = counter;
-    ble_last_status_  = status;
-    memcpy(ble_last_payload_, payload, 8);
+    ble_have_last_        = true;
+    ble_last_counter_     = counter;
+    ble_last_status_      = status;
+    ble_last_payload_len_ = pn;
+    memcpy(ble_last_payload_, payload, BLE_PAYLOAD_MAX);
 
     // Optional, experimental: forward the beacon to the MCU (resource 0x1F41).
     if (ble_report_to_mcu_ && changed)
