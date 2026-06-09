@@ -1,0 +1,89 @@
+# DM Fan — BLE Remote GATT Discovery (TEMPORARY)
+# ──────────────────────────────────────────────────────────────────────────────
+# Purpose: dump the full GATT table (services + characteristics + handles) of the
+# DreamMaker remote so we learn the server/client roles and the button UUIDs.
+#
+# HOW TO USE
+#   1. Flash this YAML to the fan (OTA — reuses the same device name).
+#   2. Open the ESPHome log.
+#   3. Press a button on the remote (it only becomes connectable while advertising
+#      rapidly — i.e. right after a button press / in pairing mode). Hold it near
+#      the fan (RSSI was -72 dBm at ~1 m).
+#   4. Watch for "[esp32_ble_client] ... Service UUID / Characteristic UUID ..."
+#      lines and copy them here.
+#   5. Re-flash the normal dm_fan.yaml afterwards.
+#
+# NOTE: bluetooth_proxy is intentionally REMOVED here so the single BLE radio is
+# fully available for the client connection (no scan/connection contention).
+
+substitutions:
+  device_name: dreammaker-fan
+  friendly_name: "Dream Maker Fan"
+
+  # Remote MAC — confirmed from the beacon capture. Change per remote.
+  remote_mac: "4B:F2:7E:47:E5:6E"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  comment: "BLE Remote GATT discovery build — TEMPORARY"
+  min_version: "2026.4.5"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+
+# Verbose only for the BLE stack — everything else stays at INFO to keep the log
+# readable. esp32_ble_client prints every service + characteristic (UUID + handle)
+# during discovery at VERY_VERBOSE.
+logger:
+  level: VERY_VERBOSE
+  logs:
+    esp32_ble_client: VERY_VERBOSE
+    esp32_ble_tracker: VERBOSE
+    esp32_ble: VERBOSE
+    scheduler: INFO
+    component: INFO
+    sensor: INFO
+    api.service: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${device_name} Fallback"
+    password: !secret wifi_ap_password
+
+captive_portal:
+
+# ── BLE central: connect to the remote and discover its GATT table ────────────
+esp32_ble_tracker:
+  scan_parameters:
+    active: true          # request scan response (full advertisement data)
+    continuous: true
+
+ble_client:
+  - mac_address: ${remote_mac}
+    id: dm_remote
+    # auto_connect: connect as soon as the remote advertises connectable. The
+    # remote sleeps between button presses, so press a button to wake it.
+    auto_connect: true
+    on_connect:
+      then:
+        - logger.log:
+            level: INFO
+            format: "── DM REMOTE CONNECTED — GATT discovery follows (see VERY_VERBOSE lines) ──"
+    on_disconnect:
+      then:
+        - logger.log:
+            level: INFO
+            format: "── DM REMOTE DISCONNECTED ──"
