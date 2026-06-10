@@ -164,12 +164,11 @@ ble_client:
         - logger.log:
             level: INFO
             format: "══ DM REMOTE CONNECTED — reading FF01+FF02 hello, then try HS buttons ══"
-        # Read BOTH characteristics right away. The lambdas below log each value
-        # and store it (last_ff01 / last_ff02) so the echo experiments can use it.
-        # FF02 was never observed yet — read it so we know if it holds a 2nd token.
-        - delay: 1s
+        # Wait 3 s for BOTH CCCD subscriptions (FF01 + FF02) to complete before
+        # reading. In tests the FF02 CCCD finished ~2.2 s after connect; 3 s is safe.
+        - delay: 3s
         - lambda: 'id(cap_ff01).update();'
-        - delay: 500ms
+        - delay: 300ms
         - lambda: 'id(cap_ff02).update();'
     on_disconnect:
       then:
@@ -251,7 +250,10 @@ sensor:
     accuracy_decimals: 0
     service_uuid: "00FF"
     characteristic_uuid: "FF02"
-    notify: true
+    # notify: false (no CCCD subscription on FF02 — keep it as a clean write
+    # channel for the handshake echo). We write TO FF02; the remote uses FF01
+    # NOTIFY to send button events back. If button events appear on FF02 too,
+    # re-enable notify here.
     update_interval: never
     lambda: |-
       if (x.empty()) return 0.0f;
@@ -259,7 +261,7 @@ sensor:
       char hex[x.size() * 3 + 1];
       char *p = hex;
       for (uint8_t b : x) { p += snprintf(p, 4, "%02X ", b); }
-      if (p > hex) *(p - 1) = '\0';  // trim trailing space
+      if (p > hex) *(p - 1) = '\0';
       ESP_LOGI("dm_cap", "FF02 data [%u bytes]: %s", (unsigned)x.size(), hex);
       return (float)x.size();
 
