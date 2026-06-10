@@ -1,0 +1,231 @@
+# DM Fan — BLE Remote Button Capture (Phase 3, Step 1)
+# ──────────────────────────────────────────────────────────────────────────────
+# Purpose: subscribe to GATT notifications on 0xFF01 and 0xFF02 and log the
+# raw hex payload for every button press on the remote. Build the button→action
+# map from the logged bytes, then integrate the mapping into dm_fan.h Phase 3.
+#
+# Key design choices
+#   • dm_fan component stays active (ble_remote: false) → UART keepalive runs.
+#     Without it the MCU pulls EN LOW after ~4 min → POWERON_RESET.
+#   • bluetooth_proxy REMOVED. ble_client needs uncontested BLE radio access.
+#   • sensor lambda (returns float = byte count) — NOT text_sensor.
+#     Binary GATT data breaks HA API with "String field had bad UTF-8" if sent
+#     as a text_sensor. The float never leaves ESPHome as raw bytes.
+#   • notify: true on both 0xFF01 and 0xFF02. We do not yet know which
+#     characteristic carries which button events.
+#
+# HOW TO USE
+#   1.  Flash this YAML via OTA:
+#         esphome run ble_capture.yaml
+#   2.  Open ESPHome log (serial or: esphome logs ble_capture.yaml).
+#   3.  Press ONE button on the remote (hold near the ESP32).
+#       Wait for connection: "══ DM REMOTE CONNECTED ══"
+#   4.  Press the button once more. Look for:
+#         [I][dm_cap] FF01 notify [N bytes]: XX XX XX ...
+#         [I][dm_cap] FF02 notify [N bytes]: XX XX XX ...
+#   5.  Record the hex in PROTOCOL.md under "Per-button capture table".
+#   6.  Repeat for every button:
+#         Power | Speed+ | Speed- | Mode | Oscillation on/off
+#         Osc angle (each step) | Timer | Sound | LED | Child-lock
+#   7.  When the map is complete, implement the Phase 3 handler in dm_fan.h:
+#         on_gattc_event(ESP_GATTC_NOTIFY_EVT) → parse payload → call
+#         set_power() / set_speed() / etc.
+#
+# FINDINGS SO FAR  (2026-06-10, ble_discovery.yaml run)
+#   Remote MAC:   4B:F2:7E:47:E5:6E
+#   Company ID:   0x4D44  ("DM")
+#   GATT service: 0x00FF  handles 0x10–0x18
+#     0xFF01  handle 0x12  props 0x16  READ · WRITE_NR · NOTIFY
+#     0xFF02  handle 0x16  props 0x1A  READ · WRITE  ·  NOTIFY
+#   First read on connect (0xFF01, 20 bytes, exact trigger unknown):
+#     29 b0 c3 6e 91 97 b4 71 00 01 03 01 00 03 29 b0 c3 6e 91 97
+#   Connection succeeded WITHOUT bonding → bonding likely not required.
+#
+# Re-flash dm_fan.yaml when capture is complete.
+# ──────────────────────────────────────────────────────────────────────────────
+
+substitutions:
+  device_name: dreammaker-fan
+  friendly_name: "Dream Maker Fan"
+  remote_mac: "4B:F2:7E:47:E5:6E"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  comment: "BLE button capture — TEMPORARY"
+  min_version: "2026.4.5"
+  project:
+    name: "d0np3p3.dreammaker-fan"
+    version: "4.0.0-beta"
+  on_boot:
+    priority: -100
+    then:
+      - lambda: 'id(esp_idf_version).publish_state(esp_get_idf_version());'
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+    advanced:
+      sram1_as_iram: true
+
+logger:
+  level: INFO
+  logs:
+    dm_cap: INFO           # our capture log tag — always visible
+    esp32_ble_client: INFO
+    esp32_ble_tracker: INFO
+    esp32_ble: INFO
+    dm_fan: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${device_name} Fallback"
+    password: !secret wifi_ap_password
+
+captive_portal:
+
+# ── External component (same source as dm_fan.yaml) ──────────────────────────
+external_components:
+  - source:
+      type: git
+      url: https://github.com/d0np3p3/esphome-dreammaker-fan
+      ref: v4.0.0-beta
+      refresh: 0s
+    components: [dm_fan]
+  # Local override for development:
+  # - source:
+  #     type: local
+  #     path: components
+  #   components: [dm_fan]
+
+# ── UART (kept alive to satisfy MCU keepalive) ────────────────────────────────
+uart:
+  id: uart_bus
+  tx_pin: GPIO17
+  rx_pin: GPIO16
+  baud_rate: 19200
+
+# ── Fan: dm_fan with BLE disabled (UART only) ─────────────────────────────────
+# ble_remote: false → no BLE scanning by dm_fan; the BLE radio is used
+# exclusively by the ble_client below.
+fan:
+  - platform: dm_fan
+    id: my_fan
+    name: "DM Fan"
+    uart_id: uart_bus
+    ble_remote: false
+    mcu_version:
+      name: "MCU Version"
+      entity_category: diagnostic
+    temperature:
+      name: "Temperatur"
+      entity_category: diagnostic
+    humidity:
+      name: "Luftfeuchtigkeit"
+      entity_category: diagnostic
+
+# ── BLE: scan + connect to remote ────────────────────────────────────────────
+esp32_ble_tracker:
+  scan_parameters:
+    active: true
+    continuous: true
+
+ble_client:
+  - mac_address: ${remote_mac}
+    id: dm_remote
+    auto_connect: true
+    on_connect:
+      then:
+        - logger.log:
+            level: INFO
+            format: "══ DM REMOTE CONNECTED — press a button to capture ══"
+    on_disconnect:
+      then:
+        - logger.log:
+            level: INFO
+            format: "══ DM REMOTE DISCONNECTED — press a button to reconnect ══"
+
+# ── Raw byte capture ──────────────────────────────────────────────────────────
+# sensor returns payload length (float) — HA only sees a number, never raw bytes.
+# The lambda hex-dumps the bytes to the serial/OTA log as [I][dm_cap] lines.
+#
+# update_interval: never  → sensor is purely notification-driven, no polling.
+sensor:
+  - platform: ble_client
+    ble_client_id: dm_remote
+    id: cap_ff01
+    name: "BLE capture FF01 len"
+    icon: "mdi:bluetooth"
+    entity_category: diagnostic
+    unit_of_measurement: "B"
+    accuracy_decimals: 0
+    service_uuid: "00FF"
+    characteristic_uuid: "FF01"
+    notify: true
+    update_interval: never
+    lambda: |-
+      if (x.empty()) return 0.0f;
+      char hex[x.size() * 3 + 1];
+      char *p = hex;
+      for (uint8_t b : x) { p += snprintf(p, 4, "%02X ", b); }
+      if (p > hex) *(p - 1) = '\0';  // trim trailing space
+      ESP_LOGI("dm_cap", "FF01 notify [%u bytes]: %s", (unsigned)x.size(), hex);
+      return (float)x.size();
+
+  - platform: ble_client
+    ble_client_id: dm_remote
+    id: cap_ff02
+    name: "BLE capture FF02 len"
+    icon: "mdi:bluetooth"
+    entity_category: diagnostic
+    unit_of_measurement: "B"
+    accuracy_decimals: 0
+    service_uuid: "00FF"
+    characteristic_uuid: "FF02"
+    notify: true
+    update_interval: never
+    lambda: |-
+      if (x.empty()) return 0.0f;
+      char hex[x.size() * 3 + 1];
+      char *p = hex;
+      for (uint8_t b : x) { p += snprintf(p, 4, "%02X ", b); }
+      if (p > hex) *(p - 1) = '\0';  // trim trailing space
+      ESP_LOGI("dm_cap", "FF02 notify [%u bytes]: %s", (unsigned)x.size(), hex);
+      return (float)x.size();
+
+  # ── Diagnostic sensors (same as dm_fan.yaml) ─────────────────────────────
+  - platform: uptime
+    name: "Uptime"
+    icon: "mdi:timer-outline"
+    entity_category: diagnostic
+
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    icon: "mdi:wifi"
+    update_interval: 60s
+    entity_category: diagnostic
+
+# ── Version info ─────────────────────────────────────────────────────────────
+text_sensor:
+  - platform: version
+    name: "ESPHome Version"
+    icon: "mdi:package-up"
+    entity_category: diagnostic
+
+  - platform: template
+    name: "ESP-IDF Version"
+    id: esp_idf_version
+    icon: "mdi:chip"
+    entity_category: diagnostic
+    update_interval: never
