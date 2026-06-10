@@ -41,6 +41,16 @@
 #     29 b0 c3 6e 91 97 b4 71 00 01 03 01 00 03 29 b0 c3 6e 91 97
 #   Connection succeeded WITHOUT bonding → bonding likely not required.
 #
+# FINDINGS 2026-06-10, first ble_capture.yaml run
+#   • Connection + service discovery OK, but ZERO notifications on button press.
+#   • Remote keeps blinking after connect = waiting for a handshake response
+#     (with original FW the ESP/MCU answers and blinking stops).
+#   • Both disconnects (HCI reason 0x08 = supervision timeout) were caused by
+#     BATTERY REMOVAL, not by the remote giving up — the link itself is stable.
+#   → The remote requires a WRITE from us before it streams button events.
+#     Use the "BLE HS…" buttons in HA (below) to try handshake variants while
+#     connected. Watch remote LED: blinking stops = correct handshake found.
+#
 # Re-flash dm_fan.yaml when capture is complete.
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -149,12 +159,22 @@ ble_client:
       then:
         - logger.log:
             level: INFO
-            format: "══ DM REMOTE CONNECTED — press a button to capture ══"
+            format: "══ DM REMOTE CONNECTED — reading FF01 hello, then try HS buttons ══"
+        # Read the 20-byte "hello" from FF01 right away. The lambda below logs
+        # it and stores it in last_ff01 so the echo experiments can use it.
+        - delay: 1s
+        - lambda: 'id(cap_ff01).update();'
     on_disconnect:
       then:
         - logger.log:
             level: INFO
-            format: "══ DM REMOTE DISCONNECTED — press a button to reconnect ══"
+            format: "══ DM REMOTE DISCONNECTED — press a remote button to reconnect ══"
+
+# Last value read/notified on FF01 — used by the echo handshake experiments.
+globals:
+  - id: last_ff01
+    type: std::vector<uint8_t>
+    restore_value: no
 
 # ── Raw byte capture ──────────────────────────────────────────────────────────
 # sensor returns payload length (float) — HA only sees a number, never raw bytes.
@@ -177,11 +197,12 @@ sensor:
     update_interval: never
     lambda: |-
       if (x.empty()) return 0.0f;
+      id(last_ff01).assign(x.begin(), x.end());
       char hex[x.size() * 3 + 1];
       char *p = hex;
       for (uint8_t b : x) { p += snprintf(p, 4, "%02X ", b); }
       if (p > hex) *(p - 1) = '\0';  // trim trailing space
-      ESP_LOGI("dm_cap", "FF01 notify [%u bytes]: %s", (unsigned)x.size(), hex);
+      ESP_LOGI("dm_cap", "FF01 data [%u bytes]: %s", (unsigned)x.size(), hex);
       return (float)x.size();
 
   - platform: ble_client
@@ -231,3 +252,69 @@ text_sensor:
     icon: "mdi:chip"
     entity_category: diagnostic
     update_interval: never
+
+# ── Handshake experiments ─────────────────────────────────────────────────────
+# The remote blinks after connect and times out (HCI 0x08) without sending any
+# notification — it expects a write from us first. Press these HA buttons WHILE
+# the remote is connected (and still blinking). After each press:
+#   • watch the remote LED  → blinking stops = handshake accepted ✓
+#   • watch the log         → FF01/FF02 notify lines = button events flowing ✓
+# Then note WHICH HS button worked and press remote buttons to capture.
+button:
+  - platform: template
+    name: "BLE Read FF01 now"
+    icon: "mdi:bluetooth-transfer"
+    on_press:
+      - lambda: 'id(cap_ff01).update();'
+
+  - platform: template
+    name: "BLE HS1: 01 → FF02"
+    icon: "mdi:numeric-1-box"
+    on_press:
+      - ble_client.ble_write:
+          id: dm_remote
+          service_uuid: "00FF"
+          characteristic_uuid: "FF02"
+          value: [0x01]
+      - logger.log: { level: INFO, format: "HS1 sent: 01 → FF02" }
+
+  - platform: template
+    name: "BLE HS2: echo FF01 → FF02"
+    icon: "mdi:numeric-2-box"
+    on_press:
+      - ble_client.ble_write:
+          id: dm_remote
+          service_uuid: "00FF"
+          characteristic_uuid: "FF02"
+          value: !lambda |-
+            if (id(last_ff01).empty())
+              ESP_LOGW("dm_cap", "HS2: last_ff01 empty — press 'BLE Read FF01 now' first");
+            else
+              ESP_LOGI("dm_cap", "HS2 sent: echo %u bytes → FF02", (unsigned)id(last_ff01).size());
+            return id(last_ff01);
+
+  - platform: template
+    name: "BLE HS3: echo FF01 → FF01"
+    icon: "mdi:numeric-3-box"
+    on_press:
+      - ble_client.ble_write:
+          id: dm_remote
+          service_uuid: "00FF"
+          characteristic_uuid: "FF01"
+          value: !lambda |-
+            if (id(last_ff01).empty())
+              ESP_LOGW("dm_cap", "HS3: last_ff01 empty — press 'BLE Read FF01 now' first");
+            else
+              ESP_LOGI("dm_cap", "HS3 sent: echo %u bytes → FF01", (unsigned)id(last_ff01).size());
+            return id(last_ff01);
+
+  - platform: template
+    name: "BLE HS4: 01 → FF01"
+    icon: "mdi:numeric-4-box"
+    on_press:
+      - ble_client.ble_write:
+          id: dm_remote
+          service_uuid: "00FF"
+          characteristic_uuid: "FF01"
+          value: [0x01]
+      - logger.log: { level: INFO, format: "HS4 sent: 01 → FF01" }
