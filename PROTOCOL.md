@@ -268,48 +268,48 @@ Open items before Path A can be coded:
 3. **Pairing/bonding** — whether notify works unbonded (as in this capture) or
    the remote later requires bonding; which button combo triggers pairing.
 
-### GATT capture run 2 (2026-06-10) + Tuya protocol match ⚠️ MAJOR
+### GATT handshake — SOLVED (2026-06-10)
 
-Second capture (`ble_capture.yaml`, native sensor lambda — no text_sensor):
-- Connection + service discovery succeed every time.
-- **ZERO notifications** arrive on 0xFF01/0xFF02 when buttons are pressed.
-- The remote **keeps blinking** after connect (in the original system the
-  blinking stops once the fan/module answers).
-- Disconnects in the log were caused by battery removal, not by the remote —
-  the GATT link itself is stable for as long as the remote is powered.
+The bind handshake is a **plain challenge-echo**, no AES crypto:
 
-**Conclusion: the remote waits for a handshake/bind response before it streams
-button events.** A bare GATT connection is not enough.
+1. Remote → ESP **FF01 NOTIFY/READ** (20 bytes):
+   `TokenA(6) | Mid(8) | TokenA(6)`
+   Example: `29 b0 c3 6e 91 97 b4 71 00 01 03 01 00 03 29 b0 c3 6e 91 97`
 
-**Tuya OEM match (decisive).** DreamMaker is a Tuya OEM. The Tuya MCU serial
-protocol defines a *Bluetooth/Beacon remote control* feature whose command
-payload is exactly:
+2. ESP → Remote **FF02 WRITE** (same 20 bytes verbatim — echo the challenge).
 
-```
-Category ID (1 byte) | Control command (1 byte) | Command data (4 bytes)
-```
+3. Remote stops blinking. Remote → ESP **FF01 NOTIFY** (bind-confirmed state, 20 bytes):
+   `TokenB(6) | Mid2(8) | TokenB(6)`
+   Example: `0D 0A 40 15 DC 7C 45 43 00 01 03 01 00 03 0D 0A 40 15 DC 7C`
 
-- Fan category = `0x05`; custom fan category = `0xFE` (fan mode 0x01: 0=manual,
-  1=natural, 2=sleep).
-- "Send key values" command `0x01`: Byte1 = press type (0 single / 1 double /
-  2 long / 3 hold / 4 release), Byte2 = key value.
-- The remote must be **bound** first (≤5 devices, 30-second pairing window).
-- In a Tuya device the BLE+WiFi combo module (which is exactly the ESP32 we
-  replaced) decrypts the remote command and forwards it to the MCU via serial
-  cmd `0x35` subcmd `0x06`. On our FACE-protocol MCU the equivalent inbound
-  resource is `0x1F41` (already documented above).
+After step 3, the remote is bound and streams button events as further
+notifications on FF01 (and possibly FF02).
 
-So the original architecture was:
-`remote --BLE--> Tuya ESP module (decrypt + bind key) --FACE 0x1F41--> fan MCU`.
-We replaced the Tuya ESP module with ESPHome, which is why the remote no longer
-gets its handshake → keeps blinking → sends no button events.
+**Phase 3 implementation** in `dm_fan.h`:
+- On connect: read FF01 → store 20-byte challenge.
+- On FF01 NOTIFY (first, 20-byte): write the same bytes back to FF02 (WRITE).
+- On subsequent FF01/FF02 NOTIFY: decode payload → fan action.
 
-**Why the captured 20-byte FF01 value looks encrypted.** The value
-`29 b0 c3 6e 91 97 | b4 71 00 01 03 01 00 03 | 29 b0 c3 6e 91 97` does NOT begin
-with `0x05` (fan category), so it is not the plaintext `category+command+data`
-tuple — it is almost certainly the Tuya BLE pairing/auth frame (random + derived
-auth), AES-encrypted with the bind key. The 6-byte block repeated at offset 0
-and 14 fits a "random echoed back after transform" pairing pattern.
+**Per-button capture table** (fill in during the current ble_capture session):
+
+| Button | FF01 payload (hex) | FF02 payload (hex) |
+|--------|-------------------|-------------------|
+| Power | | |
+| Speed + | | |
+| Speed − | | |
+| Mode | | |
+| Oscillation | | |
+| Osc angle | | |
+| Timer | | |
+| Sound | | |
+| LED | | |
+| Child lock | | |
+
+Context: DreamMaker is a Tuya OEM (Tuya BLE remote protocol). The original
+architecture was `remote --BLE--> Tuya ESP module --FACE 0x1F41--> fan MCU`.
+We replaced the Tuya module with ESPHome. The handshake turned out to be a
+**plain echo** (no AES), not the encrypted Tuya bind we feared. Once the
+per-button table is complete, dm_fan.h Phase 3 can be implemented.
 
 **Revised path forward (replaces the optimistic "no crypto" note above):**
 - *Cheap test first:* `ble_capture.yaml` now has HS1–HS4 handshake buttons.
