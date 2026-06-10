@@ -146,8 +146,13 @@ Captured 2026-06-01 (idle): `4B:F2:7E:47:E5:6E`, company `DM`,
 
 The `dm_fan` component decodes this when `ble_remote: true` and logs every
 beacon. Changed counter/status/payload → `INFO` (button event), repeated idle
-heartbeat → `DEBUG`. **Button-to-payload mapping is not yet known** — flash
-v4.0.0-beta, press remote buttons, and compare the logged `payload=[...]`.
+heartbeat → `DEBUG`.
+
+**Confirmed 2026-06-10 on hardware:** the payload `[10..17]` stays all-zero even
+during button presses / pairing-mode rapid advertising. The advertisement is a
+pure *heartbeat* — **button commands do NOT travel over advertisements, they go
+over a GATT connection** (the remote is `connectable: true`). Phase 3 (GATT) is
+required for button reception; see below.
 
 ### UART forward to MCU — resource `0x1F41` (EXPERIMENTAL, unconfirmed)
 
@@ -162,14 +167,60 @@ MCU→ESP (action:82): FA CE 00 0A 82 1F 41 ... 01 [chk]   (ACK, value 0x01)
 > `BLE->mcu report timeout!` after 2 failures triggers `SW_CPU_RESET` (0x238D).
 > Gated behind `ble_report_to_mcu: true`, **off by default**.
 
-### Resource table additions
+### Full resource-ID map (from flash-firmware analysis)
 
-| Resource | Action | Direction | Meaning |
-|----------|--------|-----------|---------|
-| 0x1F41 | 2/82 | ESP↔MCU | BLE remote beacon / pairing |
+| Dec | Hex | Action | Meaning |
+|-----|-----|--------|---------|
+| 113 | 0x0071 | 81/84 | Heartbeat / version report to cloud |
+| 121 | 0x0079 | 84 | Status report |
+| 127 | 0x007F | 1 | Device-info (comm/rf/mcu version + signal) |
+| 2000 | 0x07D0 | 1 | Boot device-announce (MAC, SSID, model) |
+| 2004 | 0x07D4 | 2/4 | Get/Set property |
+| 8001 | 0x1F41 | 2/82 | **BLE remote beacon / pairing** |
+| 8004 | 0x1F44 | 1/81 | Provisioning start (WiFi reset) |
+| 9002 | 0x232A | 2/82 | Boot state request |
+| 9013 | 0x2335 | 4 | Set command (alternative path) |
+| 9031 | 0x2347 | 84/82 | Fan state push / WiFi response |
+| 9101 | 0x238D | 1/81 | Reset command |
 
-### Blockers for full button support
+### State-frame field order — JSON vs binary ⚠️
 
-1. **beaconkey** (NVS `ble_key`) — needed to decrypt the payload (AES-128 suspected)
-2. Encryption algorithm + key-derivation — unconfirmed
-3. Button → byte mapping — gather via Phase 1 logs
+The cloud JSON template declares fields as:
+`deviceException, useException, power, mode, speed, roll_enable, roll_angle,
+power_delay, sound, light, child_lock, temperature, humidity, ext1..ext6`.
+
+This is the **JSON serialization order, NOT the binary push-frame (0x2347) byte
+order.** The push-frame binary layout is empirically confirmed as
+`power, speed, mode, …` (see the RX table above — POWER@18, SPEED@19, MODE@20).
+Do **not** reorder the RX offsets to match the JSON order; speed and mode would
+swap. `roll_enable` / `roll_control` / `roll_angle` are three separate properties
+and map to our `OSC_ONOFF` (0x03) / `ROTATE` (0x05) / `OSC_ANGLE` (0x04).
+`ext1..ext6` = fragmented static product_id, irrelevant.
+
+### Cloud endpoints (for firewall blocking, original firmware only)
+
+```
+cloud1.dm-maker.com   TCP cloud link
+api2.dm-maker.com     OTA firmware server
+```
+
+Irrelevant for ESPHome — the ESP no longer talks to the cloud.
+
+### Phase 3 — buttons over GATT (open)
+
+Flash-dump analysis (2026-05-23) showed the remote uses **standard BLE bonding,
+not custom crypto** — the "beaconkey" is just the BLE LTK, handled natively by
+the ESP-IDF stack. So no manual decryption is needed. Two paths:
+
+- **Path A (recommended): re-bond** the remote with the ESPHome ESP32 (Just
+  Works). No NVS manipulation. Requires the ESP32 to act in the correct GATT role.
+- **Path B: import the original LTK** — impossible: all NVS dumps were taken
+  **unpaired** (`ble_model=0`, `ble_key` zeroed), so no LTK exists to import.
+
+Open items before Path A can be coded:
+
+1. **GATT role + UUIDs** — run `ble_discovery.yaml`: connect to the remote and
+   dump its services/characteristics. Determines client-vs-server and the button
+   characteristic (look for `NOTIFY`).
+2. **Pairing trigger** — which remote button combo starts bonding.
+3. **Command format** — map characteristic values to fan actions.
