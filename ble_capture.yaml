@@ -48,8 +48,12 @@
 #   • Both disconnects (HCI reason 0x08 = supervision timeout) were caused by
 #     BATTERY REMOVAL, not by the remote giving up — the link itself is stable.
 #   → The remote requires a WRITE from us before it streams button events.
-#     Use the "BLE HS…" buttons in HA (below) to try handshake variants while
-#     connected. Watch remote LED: blinking stops = correct handshake found.
+#     This is the Tuya BLE bind handshake the original ESP module performed
+#     (DreamMaker is a Tuya OEM; see PROTOCOL.md "Tuya OEM match").
+#     Use the "BLE HS1…HS7" buttons in HA (below) to try handshake variants
+#     while connected. Watch remote LED: blinking stops = correct handshake.
+#     If none work, the bind needs the encrypted Tuya key exchange → SWD-dump
+#     the DA14580 remote to recover it.
 #
 # Re-flash dm_fan.yaml when capture is complete.
 # ──────────────────────────────────────────────────────────────────────────────
@@ -159,20 +163,26 @@ ble_client:
       then:
         - logger.log:
             level: INFO
-            format: "══ DM REMOTE CONNECTED — reading FF01 hello, then try HS buttons ══"
-        # Read the 20-byte "hello" from FF01 right away. The lambda below logs
-        # it and stores it in last_ff01 so the echo experiments can use it.
+            format: "══ DM REMOTE CONNECTED — reading FF01+FF02 hello, then try HS buttons ══"
+        # Read BOTH characteristics right away. The lambdas below log each value
+        # and store it (last_ff01 / last_ff02) so the echo experiments can use it.
+        # FF02 was never observed yet — read it so we know if it holds a 2nd token.
         - delay: 1s
         - lambda: 'id(cap_ff01).update();'
+        - delay: 500ms
+        - lambda: 'id(cap_ff02).update();'
     on_disconnect:
       then:
         - logger.log:
             level: INFO
             format: "══ DM REMOTE DISCONNECTED — press a remote button to reconnect ══"
 
-# Last value read/notified on FF01 — used by the echo handshake experiments.
+# Last values read/notified on each char — used by the echo handshake experiments.
 globals:
   - id: last_ff01
+    type: std::vector<uint8_t>
+    restore_value: no
+  - id: last_ff02
     type: std::vector<uint8_t>
     restore_value: no
 
@@ -220,11 +230,12 @@ sensor:
     update_interval: never
     lambda: |-
       if (x.empty()) return 0.0f;
+      id(last_ff02).assign(x.begin(), x.end());
       char hex[x.size() * 3 + 1];
       char *p = hex;
       for (uint8_t b : x) { p += snprintf(p, 4, "%02X ", b); }
       if (p > hex) *(p - 1) = '\0';  // trim trailing space
-      ESP_LOGI("dm_cap", "FF02 notify [%u bytes]: %s", (unsigned)x.size(), hex);
+      ESP_LOGI("dm_cap", "FF02 data [%u bytes]: %s", (unsigned)x.size(), hex);
       return (float)x.size();
 
   # ── Diagnostic sensors (same as dm_fan.yaml) ─────────────────────────────
@@ -254,32 +265,60 @@ text_sensor:
     update_interval: never
 
 # ── Handshake experiments ─────────────────────────────────────────────────────
-# The remote blinks after connect and times out (HCI 0x08) without sending any
-# notification — it expects a write from us first. Press these HA buttons WHILE
-# the remote is connected (and still blinking). After each press:
-#   • watch the remote LED  → blinking stops = handshake accepted ✓
-#   • watch the log         → FF01/FF02 notify lines = button events flowing ✓
-# Then note WHICH HS button worked and press remote buttons to capture.
+# The remote blinks after connect and sends NO notification — it expects a write
+# from us first (the Tuya BLE bind handshake the original ESP module performed).
+#
+# The 20-byte FF01 value has the shape:  TokenA(6) | Mid(8) | TokenA(6)
+#   29 b0 c3 6e 91 97 | b4 71 00 01 03 01 00 03 | 29 b0 c3 6e 91 97
+# The repeated 6-byte TokenA is the prime challenge-response suspect: the remote
+# likely wants TokenA (or the whole frame) written back, possibly to FF02.
+#
+# HOW TO RUN (remote connected + still blinking):
+#   1. Confirm the log shows "FF01 data [20 bytes]: …" (auto-read on connect).
+#      If not, press "BLE Re-read FF01+FF02".
+#   2. Press the HS buttons IN ORDER (HS1 → HS7), waiting ~5 s after each.
+#   3. After each press watch:
+#        • remote LED  → blinking STOPS = handshake accepted ✓✓✓
+#        • the log     → new "FFxx data […]" lines = button events flowing ✓
+#   4. Note WHICH HS button changed things, then press remote buttons to capture.
+#   5. Press "BLE Re-read FF01+FF02" after a promising HS — a successful bind
+#      often changes the readable characteristic value (state advanced).
+#
+# Ordering rationale (most → least likely for a DA14580 Tuya-style bind):
+#   HS1 echo full FF01 → FF02   (write char, classic challenge echo)
+#   HS2 echo TokenA(6) → FF02   (echo just the repeated token)
+#   HS3 echo full FF01 → FF01   (write-no-response char)
+#   HS4 echo TokenA(6) → FF01
+#   HS5 echo full FF02 → FF02   (if FF02 held its own token)
+#   HS6 write 0x01     → FF02   (trivial ACK)
+#   HS7 write 0x01     → FF01
 button:
   - platform: template
-    name: "BLE Read FF01 now"
+    name: "BLE Re-read FF01+FF02"
     icon: "mdi:bluetooth-transfer"
     on_press:
       - lambda: 'id(cap_ff01).update();'
+      - delay: 300ms
+      - lambda: 'id(cap_ff02).update();'
 
   - platform: template
-    name: "BLE HS1: 01 → FF02"
+    name: "BLE HS1: echo FF01 → FF02"
     icon: "mdi:numeric-1-box"
     on_press:
       - ble_client.ble_write:
           id: dm_remote
           service_uuid: "00FF"
           characteristic_uuid: "FF02"
-          value: [0x01]
-      - logger.log: { level: INFO, format: "HS1 sent: 01 → FF02" }
+          value: !lambda |-
+            if (id(last_ff01).empty()) {
+              ESP_LOGW("dm_cap", "HS1: last_ff01 empty — re-read FF01 first");
+              return std::vector<uint8_t>{};
+            }
+            ESP_LOGI("dm_cap", "HS1 sent: echo full FF01 (%u B) -> FF02", (unsigned)id(last_ff01).size());
+            return id(last_ff01);
 
   - platform: template
-    name: "BLE HS2: echo FF01 → FF02"
+    name: "BLE HS2: echo token → FF02"
     icon: "mdi:numeric-2-box"
     on_press:
       - ble_client.ble_write:
@@ -287,11 +326,13 @@ button:
           service_uuid: "00FF"
           characteristic_uuid: "FF02"
           value: !lambda |-
-            if (id(last_ff01).empty())
-              ESP_LOGW("dm_cap", "HS2: last_ff01 empty — press 'BLE Read FF01 now' first");
-            else
-              ESP_LOGI("dm_cap", "HS2 sent: echo %u bytes → FF02", (unsigned)id(last_ff01).size());
-            return id(last_ff01);
+            if (id(last_ff01).size() < 6) {
+              ESP_LOGW("dm_cap", "HS2: FF01 < 6 bytes — re-read FF01 first");
+              return std::vector<uint8_t>{};
+            }
+            std::vector<uint8_t> tok(id(last_ff01).begin(), id(last_ff01).begin() + 6);
+            ESP_LOGI("dm_cap", "HS2 sent: echo TokenA(6) -> FF02");
+            return tok;
 
   - platform: template
     name: "BLE HS3: echo FF01 → FF01"
@@ -302,19 +343,64 @@ button:
           service_uuid: "00FF"
           characteristic_uuid: "FF01"
           value: !lambda |-
-            if (id(last_ff01).empty())
-              ESP_LOGW("dm_cap", "HS3: last_ff01 empty — press 'BLE Read FF01 now' first");
-            else
-              ESP_LOGI("dm_cap", "HS3 sent: echo %u bytes → FF01", (unsigned)id(last_ff01).size());
+            if (id(last_ff01).empty()) {
+              ESP_LOGW("dm_cap", "HS3: last_ff01 empty — re-read FF01 first");
+              return std::vector<uint8_t>{};
+            }
+            ESP_LOGI("dm_cap", "HS3 sent: echo full FF01 (%u B) -> FF01", (unsigned)id(last_ff01).size());
             return id(last_ff01);
 
   - platform: template
-    name: "BLE HS4: 01 → FF01"
+    name: "BLE HS4: echo token → FF01"
     icon: "mdi:numeric-4-box"
     on_press:
       - ble_client.ble_write:
           id: dm_remote
           service_uuid: "00FF"
           characteristic_uuid: "FF01"
+          value: !lambda |-
+            if (id(last_ff01).size() < 6) {
+              ESP_LOGW("dm_cap", "HS4: FF01 < 6 bytes — re-read FF01 first");
+              return std::vector<uint8_t>{};
+            }
+            std::vector<uint8_t> tok(id(last_ff01).begin(), id(last_ff01).begin() + 6);
+            ESP_LOGI("dm_cap", "HS4 sent: echo TokenA(6) -> FF01");
+            return tok;
+
+  - platform: template
+    name: "BLE HS5: echo FF02 → FF02"
+    icon: "mdi:numeric-5-box"
+    on_press:
+      - ble_client.ble_write:
+          id: dm_remote
+          service_uuid: "00FF"
+          characteristic_uuid: "FF02"
+          value: !lambda |-
+            if (id(last_ff02).empty()) {
+              ESP_LOGW("dm_cap", "HS5: last_ff02 empty — re-read FF02 first");
+              return std::vector<uint8_t>{};
+            }
+            ESP_LOGI("dm_cap", "HS5 sent: echo full FF02 (%u B) -> FF02", (unsigned)id(last_ff02).size());
+            return id(last_ff02);
+
+  - platform: template
+    name: "BLE HS6: 01 → FF02"
+    icon: "mdi:numeric-6-box"
+    on_press:
+      - ble_client.ble_write:
+          id: dm_remote
+          service_uuid: "00FF"
+          characteristic_uuid: "FF02"
           value: [0x01]
-      - logger.log: { level: INFO, format: "HS4 sent: 01 → FF01" }
+      - logger.log: { level: INFO, format: "HS6 sent: 01 -> FF02" }
+
+  - platform: template
+    name: "BLE HS7: 01 → FF01"
+    icon: "mdi:numeric-7-box"
+    on_press:
+      - ble_client.ble_write:
+          id: dm_remote
+          service_uuid: "00FF"
+          characteristic_uuid: "FF01"
+          value: [0x01]
+      - logger.log: { level: INFO, format: "HS7 sent: 01 -> FF01" }
