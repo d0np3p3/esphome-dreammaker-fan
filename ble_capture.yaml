@@ -166,6 +166,7 @@ sensor:
     ble_client_id: dm_remote
     id: cap_ff01
     name: "BLE capture FF01 len"
+    type: characteristic
     icon: "mdi:bluetooth"
     entity_category: diagnostic
     unit_of_measurement: "B"
@@ -187,6 +188,7 @@ sensor:
     ble_client_id: dm_remote
     id: cap_ff02
     name: "BLE capture FF02 len"
+    type: characteristic
     icon: "mdi:bluetooth"
     entity_category: diagnostic
     unit_of_measurement: "B"
