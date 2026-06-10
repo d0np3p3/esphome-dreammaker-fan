@@ -265,3 +265,32 @@ would allow:
 
 This is lower priority than Phase 3 (BLE buttons) but useful for confirming
 the UART protocol details (0x1F41 frame format, boot sequence).
+
+---
+
+## Remote debug interface (SWD + UART) — DA1458x
+
+The remote PCB (label **Remote Control V1.0 / 2020-02-26**) exposes a full debug
+header. The presence of a **1.5 V supply pad** confirms a **Dialog DA14580/DA14585**
+in single-cell boost mode (U2 = BLE SoC, Y2 = 16 MHz crystal, U1 = external SPI flash).
+
+| Pad | Function | Pad | Function |
+|-----|----------|-----|----------|
+| TX  | UART TX  | SWC | SWD clock |
+| RX  | UART RX  | RST | Reset |
+| GND | Ground   | SWD | SWD data |
+| 1.5V| Supply (do not connect) | SDIO | (SD/aux) |
+|     |          | SCLK | (SD/aux) |
+
+**ST-Link V2 wiring:** SWC→SWCLK, SWD→SWDIO, GND→GND, RST→NRST (optional).
+Leave 1.5V open (battery powers the board).
+
+**Dumping the remote firmware is the most direct route to Phase 3** — the dump
+reveals the GATT characteristic UUIDs, the button command bytes, and the pairing
+logic in cleartext, far more reliable than live GATT discovery.
+
+- **Tool:** Dialog/Renesas **SmartSnippets Toolbox** (free) — native DA1458x
+  support, reads OTP and external SPI flash over SWD.
+- ⚠️ DA1458x OTP may have a read-protection bit. **Read only first**, never write.
+- The DA14580 boots from OTP or external SPI flash (U1) — that flash holds the
+  application image with the BLE GATT table and button-to-command mapping.
