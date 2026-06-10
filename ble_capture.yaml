@@ -186,6 +186,23 @@ globals:
     type: std::vector<uint8_t>
     restore_value: no
 
+# Auto-echo script: write current last_ff01 back to FF02.
+# Called by the FF01 sensor lambda whenever a challenge frame arrives.
+# A challenge frame has the same 6-byte token at byte 0 and byte 14
+# (structure: TokenA(6) | Mid(8) | TokenA(6)).
+script:
+  - id: echo_ff01_to_ff02
+    then:
+      - ble_client.ble_write:
+          id: dm_remote
+          service_uuid: "00FF"
+          characteristic_uuid: "FF02"
+          value: !lambda 'return id(last_ff01);'
+      - logger.log:
+          level: INFO
+          tag: "dm_cap"
+          format: "AUTO-ECHO: sent FF01 challenge back to FF02"
+
 # ── Raw byte capture ──────────────────────────────────────────────────────────
 # sensor returns payload length (float) — HA only sees a number, never raw bytes.
 # The lambda hex-dumps the bytes to the serial/OTA log as [I][dm_cap] lines.
@@ -211,8 +228,16 @@ sensor:
       char hex[x.size() * 3 + 1];
       char *p = hex;
       for (uint8_t b : x) { p += snprintf(p, 4, "%02X ", b); }
-      if (p > hex) *(p - 1) = '\0';  // trim trailing space
-      ESP_LOGI("dm_cap", "FF01 data [%u bytes]: %s", (unsigned)x.size(), hex);
+      if (p > hex) *(p - 1) = '\0';
+      // Detect challenge frame: 20 bytes, bytes[0..5] == bytes[14..19].
+      bool is_challenge = (x.size() == 20) &&
+          std::equal(x.begin(), x.begin() + 6, x.begin() + 14);
+      if (is_challenge) {
+        ESP_LOGI("dm_cap", "FF01 CHALLENGE [20 bytes]: %s → echoing to FF02", hex);
+        id(echo_ff01_to_ff02).execute();
+      } else {
+        ESP_LOGI("dm_cap", "FF01 EVENT    [%u bytes]: %s", (unsigned)x.size(), hex);
+      }
       return (float)x.size();
 
   - platform: ble_client
