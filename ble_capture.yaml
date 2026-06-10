@@ -101,7 +101,7 @@ external_components:
       type: git
       url: https://github.com/d0np3p3/esphome-dreammaker-fan
       ref: v4.0.0-beta
-      refresh: 0s
+    refresh: 0s
     components: [dm_fan]
   # Local override for development:
   # - source:
