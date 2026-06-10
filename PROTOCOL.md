@@ -268,6 +268,64 @@ Open items before Path A can be coded:
 3. **Pairing/bonding** — whether notify works unbonded (as in this capture) or
    the remote later requires bonding; which button combo triggers pairing.
 
+### GATT capture run 2 (2026-06-10) + Tuya protocol match ⚠️ MAJOR
+
+Second capture (`ble_capture.yaml`, native sensor lambda — no text_sensor):
+- Connection + service discovery succeed every time.
+- **ZERO notifications** arrive on 0xFF01/0xFF02 when buttons are pressed.
+- The remote **keeps blinking** after connect (in the original system the
+  blinking stops once the fan/module answers).
+- Disconnects in the log were caused by battery removal, not by the remote —
+  the GATT link itself is stable for as long as the remote is powered.
+
+**Conclusion: the remote waits for a handshake/bind response before it streams
+button events.** A bare GATT connection is not enough.
+
+**Tuya OEM match (decisive).** DreamMaker is a Tuya OEM. The Tuya MCU serial
+protocol defines a *Bluetooth/Beacon remote control* feature whose command
+payload is exactly:
+
+```
+Category ID (1 byte) | Control command (1 byte) | Command data (4 bytes)
+```
+
+- Fan category = `0x05`; custom fan category = `0xFE` (fan mode 0x01: 0=manual,
+  1=natural, 2=sleep).
+- "Send key values" command `0x01`: Byte1 = press type (0 single / 1 double /
+  2 long / 3 hold / 4 release), Byte2 = key value.
+- The remote must be **bound** first (≤5 devices, 30-second pairing window).
+- In a Tuya device the BLE+WiFi combo module (which is exactly the ESP32 we
+  replaced) decrypts the remote command and forwards it to the MCU via serial
+  cmd `0x35` subcmd `0x06`. On our FACE-protocol MCU the equivalent inbound
+  resource is `0x1F41` (already documented above).
+
+So the original architecture was:
+`remote --BLE--> Tuya ESP module (decrypt + bind key) --FACE 0x1F41--> fan MCU`.
+We replaced the Tuya ESP module with ESPHome, which is why the remote no longer
+gets its handshake → keeps blinking → sends no button events.
+
+**Why the captured 20-byte FF01 value looks encrypted.** The value
+`29 b0 c3 6e 91 97 | b4 71 00 01 03 01 00 03 | 29 b0 c3 6e 91 97` does NOT begin
+with `0x05` (fan category), so it is not the plaintext `category+command+data`
+tuple — it is almost certainly the Tuya BLE pairing/auth frame (random + derived
+auth), AES-encrypted with the bind key. The 6-byte block repeated at offset 0
+and 14 fits a "random echoed back after transform" pairing pattern.
+
+**Revised path forward (replaces the optimistic "no crypto" note above):**
+- *Cheap test first:* `ble_capture.yaml` now has HS1–HS4 handshake buttons.
+  Press them while connected and watch the remote LED — if any write stops the
+  blinking and unlocks notifications, the handshake is trivial and we win.
+- *If HS1–HS4 fail:* the bind requires the Tuya key-exchange. The most reliable
+  route is the **SWD dump of the remote (DA14580)** — it contains the GATT
+  pairing logic and the bind-key derivation in cleartext. Dumping the **original
+  ESP module firmware** is the alternative (it held the Tuya BLE SDK + any stored
+  bind key; note NVS showed `ble_model=0` / `ble_key` zeroed = the remote was
+  never bound to *this* fan, so the key must be derived during a fresh local
+  pairing, not imported).
+- Beacon transport is ruled out: the advertisement payload `[10..17]` stays
+  all-zero during button presses (confirmed), and the DA14580 (BLE 4.x) does not
+  use extended advertising — so buttons do not travel over the beacon.
+
 ---
 
 ## Fan MCU debug interface (SWD)
