@@ -1,17 +1,28 @@
 # DM Fan — BLE Remote GATT Discovery (TEMPORARY)
 # ──────────────────────────────────────────────────────────────────────────────
 # Purpose: dump the full GATT table (services + characteristics + handles) of the
-# DreamMaker remote so we learn the server/client roles and the button UUIDs.
+# DreamMaker remote so we learn the button characteristic UUID and properties.
 #
 # HOW TO USE
 #   1. Flash this YAML to the fan (OTA — reuses the same device name).
 #   2. Open the ESPHome log.
-#   3. Press a button on the remote (it only becomes connectable while advertising
-#      rapidly — i.e. right after a button press / in pairing mode). Hold it near
-#      the fan (RSSI was -72 dBm at ~1 m).
-#   4. Watch for "[esp32_ble_client] ... Service UUID / Characteristic UUID ..."
-#      lines and copy them here.
-#   5. Re-flash the normal dm_fan.yaml afterwards.
+#   3. Press a button on the remote (it becomes connectable ~200 ms after press).
+#      Hold it near the fan (RSSI was -76 dBm at ~1 m).
+#   4. Wait for "── DM REMOTE CONNECTED ──" in the log.
+#   5. Look for VERBOSE lines like:
+#        [V][esp32_ble_client] characteristic 0xXXXX, handle 0xNN, properties 0xZZ
+#      Properties bits: 0x02=READ  0x04=WRITE_NR  0x08=WRITE  0x10=NOTIFY  0x20=INDICATE
+#      The characteristic with NOTIFY (0x10) is the button-event characteristic.
+#   6. Copy all characteristic UUID/handle/properties lines to PROTOCOL.md.
+#   7. Re-flash the normal dm_fan.yaml afterwards.
+#
+# WHAT WAS FOUND SO FAR (2026-06-10)
+#   Service 0x1800 (GAP)   handles 0x01–0x09
+#   Service 0x1801 (GATT)  handles 0x0C–0x0F
+#   Service 0x00FF (DM)    handles 0x10–0x18  ← proprietary, contains button char
+#
+# NOTE: bluetooth_proxy is intentionally REMOVED here so the single BLE radio is
+# fully available for the client connection (no scan/connection contention).
 #
 # NOTE: bluetooth_proxy is intentionally REMOVED here so the single BLE radio is
 # fully available for the client connection (no scan/connection contention).
@@ -34,18 +45,19 @@ esp32:
   framework:
     type: esp-idf
 
-# Verbose only for the BLE stack — everything else stays at INFO to keep the log
-# readable. esp32_ble_client prints every service + characteristic (UUID + handle)
-# during discovery at VERY_VERBOSE.
+# Verbose only for the BLE stack — everything else stays at INFO.
+# esp32_ble_client logs every characteristic during enumeration at VERBOSE level.
+# esp32_ble_tracker kept at INFO to suppress BT5 extended-advertising spam (0x1b).
 logger:
   level: VERY_VERBOSE
   logs:
     esp32_ble_client: VERY_VERBOSE
-    esp32_ble_tracker: VERBOSE
+    esp32_ble_tracker: INFO        # VERBOSE floods log with "advType: 0x1b" (BT5 devices nearby)
     esp32_ble: VERBOSE
     scheduler: INFO
     component: INFO
     sensor: INFO
+    text_sensor: INFO
     api.service: INFO
 
 api:
@@ -81,9 +93,55 @@ ble_client:
       then:
         - logger.log:
             level: INFO
-            format: "── DM REMOTE CONNECTED — GATT discovery follows (see VERY_VERBOSE lines) ──"
+            format: "── DM REMOTE CONNECTED — probing service 0x00FF characteristics ──"
+        - logger.log:
+            level: INFO
+            format: "   Watch for: [V][esp32_ble_client] characteristic 0xXXXX handle=0xNN props=0xZZ"
     on_disconnect:
       then:
         - logger.log:
             level: INFO
             format: "── DM REMOTE DISCONNECTED ──"
+
+# ── Characteristic probes for service 0x00FF ─────────────────────────────────
+# ESPHome enumerates ALL characteristics of a service on the first
+# get_characteristic() call — even for mismatched UUIDs. The VERBOSE log then
+# shows every characteristic found (UUID, handle, properties).
+# Probing 0xFF01..0xFF04 covers the full Dialog DA14580 custom-service convention.
+text_sensor:
+  - platform: ble_client
+    ble_client_id: dm_remote
+    name: "Probe 0xFF01"
+    service_uuid: "00FF"
+    characteristic_uuid: "FF01"
+    id: probe_ff01
+
+  - platform: ble_client
+    ble_client_id: dm_remote
+    name: "Probe 0xFF02 (notify)"
+    service_uuid: "00FF"
+    characteristic_uuid: "FF02"
+    notify: true
+    id: probe_ff02
+
+  - platform: ble_client
+    ble_client_id: dm_remote
+    name: "Probe 0xFF03"
+    service_uuid: "00FF"
+    characteristic_uuid: "FF03"
+    id: probe_ff03
+
+  - platform: ble_client
+    ble_client_id: dm_remote
+    name: "Probe 0xFF04"
+    service_uuid: "00FF"
+    characteristic_uuid: "FF04"
+    id: probe_ff04
+
+  # GAP device name — lets us verify we're connected to the right device
+  - platform: ble_client
+    ble_client_id: dm_remote
+    name: "Device Name"
+    service_uuid: "1800"
+    characteristic_uuid: "2A00"
+    id: device_name

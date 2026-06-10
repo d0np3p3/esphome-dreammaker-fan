@@ -217,10 +217,51 @@ the ESP-IDF stack. So no manual decryption is needed. Two paths:
 - **Path B: import the original LTK** — impossible: all NVS dumps were taken
   **unpaired** (`ble_model=0`, `ble_key` zeroed), so no LTK exists to import.
 
+### GATT service table — partial (2026-06-10, `ble_discovery.yaml`)
+
+First successful GATT connection to remote `4B:F2:7E:47:E5:6E`:
+
+| Service UUID | Start handle | End handle | Notes |
+|---|---|---|---|
+| `0x1800` | `0x0001` | `0x0009` | GAP (Generic Access) |
+| `0x1801` | `0x000C` | `0x000F` | GATT (Generic Attribute) |
+| `0x00FF` | `0x0010` | `0x0018` | **DM proprietary — contains button characteristic** |
+
+MTU negotiated: 23 (default, no request sent).
+
+**Characteristics of service `0x00FF` (handles 0x10–0x18): not yet enumerated.**
+Next step: flash updated `ble_discovery.yaml` with characteristic probes → log
+will show `[V][esp32_ble_client] characteristic UUID/handle/properties`.
+
 Open items before Path A can be coded:
 
-1. **GATT role + UUIDs** — run `ble_discovery.yaml`: connect to the remote and
-   dump its services/characteristics. Determines client-vs-server and the button
-   characteristic (look for `NOTIFY`).
+1. **Characteristic UUIDs** — flash `ble_discovery.yaml` v2 (probe 0xFF01–0xFF04):
+   the VERBOSE log will show all characteristics in service 0x00FF. Look for the
+   one with `NOTIFY` property — that is the button-event characteristic.
 2. **Pairing trigger** — which remote button combo starts bonding.
 3. **Command format** — map characteristic values to fan actions.
+
+---
+
+## Fan MCU debug interface (SWD)
+
+The fan PCB (label **ZMZFS01 20200525**) has a 5-pad SWD header near the ESP32:
+
+| Pad | Function |
+|-----|----------|
+| GND | Ground |
+| RESET | MCU NRST |
+| SWCLK | SWD clock |
+| SWDIO | SWD data |
+| VDDS | 3.3 V supply — **do not connect** if board is already powered |
+
+**Wiring to ST-Link V2:** SWCLK→SWCLK, SWDIO→SWDIO, GND→GND, NRST→RESET (optional).
+
+The fan MCU is an ARM Cortex-M device (exact part TBD). Connecting an ST-Link V2
+would allow:
+- Full firmware dump of the fan MCU (if readout-protection is not set)
+- Verification/correction of the FA CE binary protocol from the MCU side
+- Debugging MCU–ESP interactions in real time
+
+This is lower priority than Phase 3 (BLE buttons) but useful for confirming
+the UART protocol details (0x1F41 frame format, boot sequence).
