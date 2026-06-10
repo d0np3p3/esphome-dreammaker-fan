@@ -217,29 +217,56 @@ the ESP-IDF stack. So no manual decryption is needed. Two paths:
 - **Path B: import the original LTK** — impossible: all NVS dumps were taken
   **unpaired** (`ble_model=0`, `ble_key` zeroed), so no LTK exists to import.
 
-### GATT service table — partial (2026-06-10, `ble_discovery.yaml`)
+### GATT table — confirmed (2026-06-10, `ble_discovery.yaml`)
 
-First successful GATT connection to remote `4B:F2:7E:47:E5:6E`:
+Full GATT enumeration of remote `4B:F2:7E:47:E5:6E`:
 
-| Service UUID | Start handle | End handle | Notes |
+| Service UUID | Start | End | Notes |
 |---|---|---|---|
-| `0x1800` | `0x0001` | `0x0009` | GAP (Generic Access) |
-| `0x1801` | `0x000C` | `0x000F` | GATT (Generic Attribute) |
-| `0x00FF` | `0x0010` | `0x0018` | **DM proprietary — contains button characteristic** |
+| `0x1800` | `0x01` | `0x09` | GAP (Generic Access) |
+| `0x1801` | `0x0C` | `0x0F` | GATT (Generic Attribute) |
+| `0x00FF` | `0x10` | `0x18` | **DM proprietary — button service** |
 
-MTU negotiated: 23 (default, no request sent).
+**Characteristics of service `0x00FF`:**
 
-**Characteristics of service `0x00FF` (handles 0x10–0x18): not yet enumerated.**
-Next step: flash updated `ble_discovery.yaml` with characteristic probes → log
-will show `[V][esp32_ble_client] characteristic UUID/handle/properties`.
+| Char UUID | Handle | Properties | Decoded |
+|---|---|---|---|
+| `0xFF01` | `0x12` | `0x16` | READ · WRITE_NR · **NOTIFY** |
+| `0xFF02` | `0x16` | `0x1A` | READ · WRITE · **NOTIFY** |
+
+(Property bits: 0x02=READ, 0x04=WRITE_NR, 0x08=WRITE, 0x10=NOTIFY.)
+GAP service `0x1800` has the standard `0x2A00`(name)/`0x2A01`/`0x2A02`/`0x2A04`.
+MTU negotiated: 23 (default).
+
+Both `0xFF01` and `0xFF02` support NOTIFY → the remote **pushes button events as
+GATT notifications** on this service. The ESP32 is the **GATT client** (central),
+the remote is the **GATT server** (peripheral). This sets the Phase 3 role:
+**ESP32 connects, subscribes to notify on 0xFF01/0xFF02, decodes the payload.**
+
+**First characteristic value captured** (20 bytes, during the discovery read —
+exact trigger not yet isolated):
+```
+29 b0 c3 6e 91 97 b4 71 00 01 03 01 00 03 29 b0 c3 6e 91 97
+└──── 6 bytes ────┘                       └──── repeat ─────┘
+```
+The 6-byte block `29 b0 c3 6e 91 97` appears at offset 0 and again at offset 14;
+the middle is `b4 71 00 01 03 01 00 03`. Not the remote's own MAC
+(`4B F2 7E 47 E5 6E`) — likely a session/pairing token + a small command tuple.
+**Needs button-by-button capture** (clean notify, see below) to map bytes→actions.
+
+> ⚠️ The `ble_client` **text_sensor** platform crashes the ESPHome↔HA API when a
+> characteristic value is non-UTF-8 binary (`TextSensorStateResponse: String
+> field had bad UTF-8`), looping disconnect/reconnect. Do **not** use text_sensor
+> to read these. Phase 3 native code must register for notify and log/handle the
+> raw bytes directly (never publish them as a string).
 
 Open items before Path A can be coded:
 
-1. **Characteristic UUIDs** — flash `ble_discovery.yaml` v2 (probe 0xFF01–0xFF04):
-   the VERBOSE log will show all characteristics in service 0x00FF. Look for the
-   one with `NOTIFY` property — that is the button-event characteristic.
-2. **Pairing trigger** — which remote button combo starts bonding.
-3. **Command format** — map characteristic values to fan actions.
+1. ✅ **GATT role + UUIDs** — done: ESP32=client, notify on 0xFF01/0xFF02.
+2. **Per-button capture** — subscribe to notify, press each button, log hex,
+   map payload → fan action. (Native notify handler, not text_sensor.)
+3. **Pairing/bonding** — whether notify works unbonded (as in this capture) or
+   the remote later requires bonding; which button combo triggers pairing.
 
 ---
 
