@@ -75,6 +75,21 @@ esphome:
     priority: -100
     then:
       - lambda: 'id(esp_idf_version).publish_state(esp_get_idf_version());'
+      # Configure BLE SMP security parameters for Just Works bonding.
+      # The remote (DA14580) may require link-layer encryption before streaming
+      # button events. NO_MITM / IO_CAP_NONE = Just Works (no PIN/passkey).
+      - lambda: |-
+          esp_ble_auth_req_t auth = ESP_LE_AUTH_REQ_SC_BOND;
+          esp_ble_gap_set_security_param(ESP_BLE_SM_AUTHEN_REQ_MODE, &auth, sizeof(auth));
+          esp_ble_io_cap_t iocap = ESP_IO_CAP_NONE;
+          esp_ble_gap_set_security_param(ESP_BLE_SM_IOCAP_MODE, &iocap, sizeof(iocap));
+          uint8_t key_size = 16;
+          esp_ble_gap_set_security_param(ESP_BLE_SM_MAX_KEY_SIZE, &key_size, sizeof(key_size));
+          uint8_t init_key = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
+          uint8_t rsp_key  = ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK;
+          esp_ble_gap_set_security_param(ESP_BLE_SM_SET_INIT_KEY, &init_key, sizeof(init_key));
+          esp_ble_gap_set_security_param(ESP_BLE_SM_SET_RSP_KEY,  &rsp_key,  sizeof(rsp_key));
+          ESP_LOGI("dm_cap", "SMP: security params set (Just Works bonding ready)");
 
 esp32:
   board: esp32dev
@@ -163,9 +178,18 @@ ble_client:
       then:
         - logger.log:
             level: INFO
-            format: "══ DM REMOTE CONNECTED — reading FF01+FF02 hello, then try HS buttons ══"
-        # Wait 3 s for BOTH CCCD subscriptions (FF01 + FF02) to complete before
-        # reading. In tests the FF02 CCCD finished ~2.2 s after connect; 3 s is safe.
+            format: "══ DM REMOTE CONNECTED — triggering SMP + reading chars ══"
+        # Immediately request link-layer encryption (SMP). The remote may gate
+        # button events behind an encrypted BLE link. ESP-IDF handles Just Works
+        # pairing transparently; if the remote responds the log will show
+        # "BT_SMP: start enc" and eventually "SMP: Link encrypted".
+        # MAC byte order for esp_bd_addr_t: MSB first = 4B F2 7E 47 E5 6E.
+        - lambda: |-
+            esp_bd_addr_t bda = {0x4B, 0xF2, 0x7E, 0x47, 0xE5, 0x6E};
+            esp_err_t ret = esp_ble_set_encryption(bda, ESP_BLE_SEC_ENCRYPT_NO_MITM);
+            ESP_LOGI("dm_cap", "SMP: esp_ble_set_encryption → %s",
+                     ret == ESP_OK ? "OK" : esp_err_to_name(ret));
+        # Wait 3 s for CCCD subscriptions AND any SMP exchange to complete.
         - delay: 3s
         - lambda: 'id(cap_ff01).update();'
         - delay: 300ms
@@ -250,10 +274,10 @@ sensor:
     accuracy_decimals: 0
     service_uuid: "00FF"
     characteristic_uuid: "FF02"
-    # notify: false (no CCCD subscription on FF02 — keep it as a clean write
-    # channel for the handshake echo). We write TO FF02; the remote uses FF01
-    # NOTIFY to send button events back. If button events appear on FF02 too,
-    # re-enable notify here.
+    # notify: true — re-enabled. The only session where the remote successfully
+    # stopped blinking had FF02 CCCD active. Without it the remote may not
+    # accept the echo (it checks that we subscribed before allowing binding).
+    notify: true
     update_interval: never
     lambda: |-
       if (x.empty()) return 0.0f;
@@ -431,3 +455,46 @@ button:
           characteristic_uuid: "FF01"
           value: [0x01]
       - logger.log: { level: INFO, format: "HS7 sent: 01 -> FF01" }
+
+  # ── XOR nonce tests (Gemini suggestion) ──────────────────────────────────────
+  # Bytes[6..7] of the challenge are a per-session nonce/counter. Manipulating
+  # them tests whether the remote validates the nonce or just checks length/token.
+  # If HS8/HS9 also stop blinking → nonce check is absent → plain echo is enough
+  # and something ELSE is blocking button events (→ SMP most likely).
+  # If HS8/HS9 do NOT stop blinking → nonce matters → crypto is involved.
+
+  - platform: template
+    name: "BLE HS8: invert nonce[6-7] → FF02"
+    icon: "mdi:numeric-8-box"
+    on_press:
+      - ble_client.ble_write:
+          id: dm_remote
+          service_uuid: "00FF"
+          characteristic_uuid: "FF02"
+          value: !lambda |-
+            if (id(last_ff01).size() < 20) {
+              ESP_LOGW("dm_cap", "HS8: last_ff01 too short");
+              return std::vector<uint8_t>{};
+            }
+            std::vector<uint8_t> v = id(last_ff01);
+            v[6] = ~v[6]; v[7] = ~v[7];
+            ESP_LOGI("dm_cap", "HS8: FF01 with inverted nonce[6-7]=%02X %02X → FF02", v[6], v[7]);
+            return v;
+
+  - platform: template
+    name: "BLE HS9: XOR nonce[6-7] ^0x55 → FF02"
+    icon: "mdi:numeric-9-box"
+    on_press:
+      - ble_client.ble_write:
+          id: dm_remote
+          service_uuid: "00FF"
+          characteristic_uuid: "FF02"
+          value: !lambda |-
+            if (id(last_ff01).size() < 20) {
+              ESP_LOGW("dm_cap", "HS9: last_ff01 too short");
+              return std::vector<uint8_t>{};
+            }
+            std::vector<uint8_t> v = id(last_ff01);
+            v[6] ^= 0x55; v[7] ^= 0x55;
+            ESP_LOGI("dm_cap", "HS9: FF01 with XOR-0x55 nonce[6-7]=%02X %02X → FF02", v[6], v[7]);
+            return v;
