@@ -152,26 +152,32 @@ air-volume/timer indicator. All **8 LEDs flash during pairing**.
 
 ### Pairing / bind procedure (user manual — CRITICAL for capture) ⚠️
 
-**Original pairing (remote ↔ fan, mediated by the fan's BLE module):**
-1. On the **fan**: hold *Head-shaking + Timer* together → top 4 fan LEDs flash =
-   fan Bluetooth reset, fan enters pairing-wait state.
-2. On the **remote**: press *Power + M* together → all 8 remote LEDs flash =
-   remote enters pairing state.
-3. Press any key on the fan → bind; a confirmation tone means the bind succeeded.
-4. No fan action within 15 s after bind → pairing exits, remote stops flashing.
+**Reset and pairing are the SAME action** — the manual lists them under two
+headings ("Bluetooth Pairing" and "Bluetooth Reset/Pair Unbinding") but the
+physical step is identical. Each side has exactly **one** reset-and-pair combo:
 
-**Bluetooth reset / unbind:**
-- On the **remote**: press *Power + M* together → 8 LEDs flash → previous bind is
-  **cleared**, remote returns to fresh pairing mode.
-- On the **fan**: hold *Head-shaking + Timer* → top 4 LEDs flash → fan unbinds.
+| Side | Combo | Result (LEDs + state) |
+|------|-------|-----------------------|
+| **Remote** | *Power + M* together | 8 LEDs flash → old bind **cleared** AND remote enters pairing-wait |
+| **Fan** | *Head-shaking + Timer* together | top 4 LEDs flash → old bind **cleared** AND fan enters pairing-wait |
+
+There is no separate "reset mode" vs "pairing mode": pressing the combo unbinds
+the previous peer and puts the device into the waiting state in one step.
+
+**Full original pairing flow (remote ↔ fan via the fan's BLE module):**
+1. **Fan**: hold *Head-shaking + Timer* → top 4 LEDs flash → fan in pairing-wait.
+2. **Remote**: press *Power + M* → 8 LEDs flash → remote in pairing-wait.
+3. Press any key on the **fan** → completes the bind; a confirmation tone sounds.
+4. No fan action within 15 s → pairing exits, remote stops flashing.
 
 > **Implication for our capture:** the remote likely only *streams button events
-> to its currently-bound peer*. Our echo stops the blinking (bind accepted at the
-> app layer) but the remote may still consider the **original Tuya module** its
-> bound peer, so no notifications reach the ESP32. **Before capturing, reset the
-> remote with Power + M** so it enters fresh pairing mode and binds to the ESP32.
-> This is the leading hypothesis for why the echo succeeds but no button
-> notifications follow — test it before assuming SMP is the blocker.
+> to its currently-bound peer*. Our echo stops the blinking (app-layer bind
+> accepted) but the remote may still consider the **original Tuya module** its
+> bound peer, so no notifications reach the ESP32. Because reset = pairing, simply
+> pressing **Power + M** on the remote clears the old bind and opens a fresh
+> pairing window — connect the ESP32 (ble_capture.yaml) during that window so the
+> remote binds to *us*. This is the leading hypothesis for why the echo succeeds
+> but no button notifications follow — test it before assuming SMP is the blocker.
 
 ### Advertisement manufacturer data
 

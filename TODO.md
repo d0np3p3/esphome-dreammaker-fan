@@ -2,16 +2,18 @@
 
 ## 🔴 Prio 1: BLE Remote Button-Capture
 
-### ⭐ NEU — zuerst probieren: Remote zurücksetzen (aus Handbuch DM-FCB01)
+### ⭐ NEU — zuerst probieren: Remote neu koppeln (aus Handbuch DM-FCB01)
 
 Die Remote streamt Tasten-Events evtl. nur an ihren **aktuell gebundenen Peer**
 (noch das originale Tuya-Modul). Unser Echo stoppt zwar das Blinken, aber die
-Bindung liegt evtl. woanders. Vor dem Capture die Remote in frischen Pairing-
-Modus versetzen:
+Bindung liegt evtl. woanders.
 
-- [ ] An der **Remote**: **Power (⏻) + M gleichzeitig** drücken
-      → alle 8 LEDs blinken = Bluetooth-Reset, alte Bindung gelöscht
-- [ ] Sofort danach ble_capture.yaml verbinden lassen + Echo-Handshake
+**Wichtig:** Reset und Pairing sind laut Handbuch **dieselbe Aktion**. An der
+Remote ist es **Power (⏻) + M gleichzeitig** — das löscht die alte Bindung UND
+öffnet gleichzeitig das Pairing-Fenster (8 LEDs blinken). Kein separater Modus.
+
+- [ ] An der **Remote**: **Power (⏻) + M gleichzeitig** drücken → 8 LEDs blinken
+- [ ] Während die 8 LEDs blinken: ble_capture.yaml verbinden lassen + Echo
 - [ ] Tasten drücken → jetzt sollten `FF01 EVENT ★`-Zeilen kommen
 - [ ] Falls das reicht: SMP-Hypothese ist erledigt (Bindung war das Problem)
 
