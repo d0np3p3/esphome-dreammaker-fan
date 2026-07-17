@@ -2,6 +2,21 @@
 
 ## 🔴 Prio 1: BLE Remote Button-Capture
 
+### ⭐ NEU — zuerst probieren: Remote zurücksetzen (aus Handbuch DM-FCB01)
+
+Die Remote streamt Tasten-Events evtl. nur an ihren **aktuell gebundenen Peer**
+(noch das originale Tuya-Modul). Unser Echo stoppt zwar das Blinken, aber die
+Bindung liegt evtl. woanders. Vor dem Capture die Remote in frischen Pairing-
+Modus versetzen:
+
+- [ ] An der **Remote**: **Power (⏻) + M gleichzeitig** drücken
+      → alle 8 LEDs blinken = Bluetooth-Reset, alte Bindung gelöscht
+- [ ] Sofort danach ble_capture.yaml verbinden lassen + Echo-Handshake
+- [ ] Tasten drücken → jetzt sollten `FF01 EVENT ★`-Zeilen kommen
+- [ ] Falls das reicht: SMP-Hypothese ist erledigt (Bindung war das Problem)
+
+### Danach: normaler Capture-Ablauf
+
 - [ ] `ble_capture.yaml` flashen (aktueller Stand: `2fdb338`)
 - [ ] Log prüfen — erwartete Sequenz:
   ```
@@ -12,8 +27,13 @@
   [D][BT_SMP] start enc ...
   FF01 EVENT ★ [N bytes]: ...  ← Tastendruck!
   ```
-- [ ] Jeden Button einmal drücken + Hex-Payload in `PROTOCOL.md` eintragen
-  (Power, Speed+/−, Mode, Oszillation, Winkel, Timer, Sound, LED, Kindersicherung)
+- [ ] Jede Aktion einmal auslösen + Hex-Payload in `PROTOCOL.md` eintragen
+  (Remote hat nur 4 Tasten → 5 Aktionen):
+  - Power ⏻ (kurz)
+  - M kurz → Speed-Cycle
+  - M lang → Modus-Cycle (Direct/Natural/Smart)
+  - Head-shaking ∿ → Oszillation
+  - Clock 🕐 → Timer-Cycle
 - [ ] Falls State=2 aber keine Tasten: **HS10 "Trigger SMP"** in HA drücken
 - [ ] Falls Verbindung nach State=2 trennt: SMP deaktivieren (esp_ble_set_encryption-Zeile auskommentieren), dann Tasten testen
 

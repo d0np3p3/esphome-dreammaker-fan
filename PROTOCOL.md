@@ -128,6 +128,51 @@ The DreamMaker remote uses a **DA14580** BLE chip and advertises a
 manufacturer-specific beacon with company ID **`0x4D44` ("DM")** — fully
 proprietary, not Tuya/Xiaomi/Zigbee.
 
+### Remote model & buttons (user manual, DM-FCB01)
+
+| Field | Value |
+|-------|-------|
+| Model | **DM-FCB01** ("Dream Maker Infrared Remote Controller") |
+| Dimensions | 130 × 28.5 × 15.5 mm |
+| Weight | 37 g |
+| Battery | LR-AAA, 1.5 V |
+| Applies to | Dream Maker Feel Fan — Freedom / Flagship version |
+
+The remote has only **4 physical buttons** → button-capture set is 5 actions:
+
+| Button | Icon | Short press | Long press |
+|--------|------|-------------|------------|
+| Power | ⏻ | On/Off | — |
+| Air Volume / Mode | M | Speed gear cycle 1→2→3→4 | Mode: Direct → Natural → Smart |
+| Head-shaking | ∿ | Oscillation On/Off | — |
+| Timed Shutdown | 🕐 | Timer cycle 0h→1h→2h→3h→4h | — |
+
+Remote indicators: 4 mode LEDs (Direct/Natural/Smart) + Bluetooth LED + a 1/2/3/4
+air-volume/timer indicator. All **8 LEDs flash during pairing**.
+
+### Pairing / bind procedure (user manual — CRITICAL for capture) ⚠️
+
+**Original pairing (remote ↔ fan, mediated by the fan's BLE module):**
+1. On the **fan**: hold *Head-shaking + Timer* together → top 4 fan LEDs flash =
+   fan Bluetooth reset, fan enters pairing-wait state.
+2. On the **remote**: press *Power + M* together → all 8 remote LEDs flash =
+   remote enters pairing state.
+3. Press any key on the fan → bind; a confirmation tone means the bind succeeded.
+4. No fan action within 15 s after bind → pairing exits, remote stops flashing.
+
+**Bluetooth reset / unbind:**
+- On the **remote**: press *Power + M* together → 8 LEDs flash → previous bind is
+  **cleared**, remote returns to fresh pairing mode.
+- On the **fan**: hold *Head-shaking + Timer* → top 4 LEDs flash → fan unbinds.
+
+> **Implication for our capture:** the remote likely only *streams button events
+> to its currently-bound peer*. Our echo stops the blinking (bind accepted at the
+> app layer) but the remote may still consider the **original Tuya module** its
+> bound peer, so no notifications reach the ESP32. **Before capturing, reset the
+> remote with Power + M** so it enters fresh pairing mode and binds to the ESP32.
+> This is the leading hypothesis for why the echo succeeds but no button
+> notifications follow — test it before assuming SMP is the blocker.
+
 ### Advertisement manufacturer data
 
 After the 2-byte company ID (which `esp32_ble_tracker` strips into the
@@ -290,20 +335,20 @@ notifications on FF01 (and possibly FF02).
 - On FF01 NOTIFY (first, 20-byte): write the same bytes back to FF02 (WRITE).
 - On subsequent FF01/FF02 NOTIFY: decode payload → fan action.
 
-**Per-button capture table** (fill in during the current ble_capture session):
+**Per-button capture table** (fill in during the current ble_capture session).
+The remote (DM-FCB01) has only 4 buttons; M has a short/long press → 5 actions:
 
-| Button | FF01 payload (hex) | FF02 payload (hex) |
-|--------|-------------------|-------------------|
-| Power | | |
-| Speed + | | |
-| Speed − | | |
-| Mode | | |
-| Oscillation | | |
-| Osc angle | | |
-| Timer | | |
-| Sound | | |
-| LED | | |
-| Child lock | | |
+| Action | Button + press | FF01 payload (hex) | FF02 payload (hex) |
+|--------|----------------|-------------------|-------------------|
+| Power On/Off | ⏻ short | | |
+| Speed cycle | M short | | |
+| Mode cycle (Direct/Natural/Smart) | M long | | |
+| Oscillation On/Off | ∿ short | | |
+| Timer cycle (0/1/2/3/4h) | 🕐 short | | |
+
+Note: the remote has no dedicated Speed+/Speed−, no angle, no Sound/LED/Child-lock
+buttons — those fan properties are only reachable over UART from HA, not the
+remote. The remote cycles speed and timer; it cannot set an absolute value.
 
 Context: DreamMaker is a Tuya OEM (Tuya BLE remote protocol). The original
 architecture was `remote --BLE--> Tuya ESP module --FACE 0x1F41--> fan MCU`.
