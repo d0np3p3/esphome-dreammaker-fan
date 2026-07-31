@@ -1,103 +1,104 @@
 # DreamMaker Fan — Open Tasks
 
-## 🔴 Prio 1: BLE Remote Button-Capture
-
-### ⭐ NEU — zuerst probieren: Remote neu koppeln (aus Handbuch DM-FCB01)
-
-Die Remote streamt Tasten-Events evtl. nur an ihren **aktuell gebundenen Peer**
-(noch das originale Tuya-Modul). Unser Echo stoppt zwar das Blinken, aber die
-Bindung liegt evtl. woanders.
-
-**Wichtig:** Reset und Pairing sind laut Handbuch **dieselbe Aktion**. An der
-Remote ist es **Power (⏻) + M gleichzeitig** — das löscht die alte Bindung UND
-öffnet gleichzeitig das Pairing-Fenster (8 LEDs blinken). Kein separater Modus.
-
-- [ ] An der **Remote**: **Power (⏻) + M gleichzeitig** drücken → 8 LEDs blinken
-- [ ] Während die 8 LEDs blinken: ble_capture.yaml verbinden lassen + Echo
-- [ ] Tasten drücken → jetzt sollten `FF01 EVENT ★`-Zeilen kommen
-- [ ] Falls das reicht: SMP-Hypothese ist erledigt (Bindung war das Problem)
-
-### Danach: normaler Capture-Ablauf
-
-- [ ] `ble_capture.yaml` flashen (aktueller Stand: `2fdb338`)
-- [ ] Log prüfen — erwartete Sequenz:
-  ```
-  FF01 CHALLENGE-1 [20]: ... → state=1, echoing to FF02
-  AUTO-ECHO: sent challenge to FF02
-  FF01 POST-BIND  [20]: ... → state=2, SMP triggered
-  SMP: esp_ble_set_encryption → OK
-  [D][BT_SMP] start enc ...
-  FF01 EVENT ★ [N bytes]: ...  ← Tastendruck!
-  ```
-- [ ] Jede Aktion einmal auslösen + Hex-Payload in `PROTOCOL.md` eintragen
-  (Remote hat nur 4 Tasten → 5 Aktionen):
-  - Power ⏻ (kurz)
-  - M kurz → Speed-Cycle
-  - M lang → Modus-Cycle (Direct/Natural/Smart)
-  - Head-shaking ∿ → Oszillation
-  - Clock 🕐 → Timer-Cycle
-- [ ] Falls State=2 aber keine Tasten: **HS10 "Trigger SMP"** in HA drücken
-- [ ] Falls Verbindung nach State=2 trennt: SMP deaktivieren (esp_ble_set_encryption-Zeile auskommentieren), dann Tasten testen
+> **Richtungswechsel 2026-07-31** (aus Handoff der Parallel-Session):
+> Tasten werden **als BLE-Advertisement** gesendet (`status=0x02`, 8-Byte
+> Payload), **nicht** über GATT. Die alte "Beacon ausgeschlossen"-Annahme war an
+> einer *ungebundenen* Remote gemessen und ist widerlegt. Siehe PROTOCOL.md.
 
 ---
 
-## 🟡 Prio 2: Remote UART sniffing (Pico W, 2 Drähte)
+## 🔴 Prio 1: Beacon-Lerntabelle aufbauen (neuer Hauptweg)
 
-Lötpunkte: **TX** + **GND** auf dem Remote-Debug-Header (9-Pad-Raster, beschriftet)
+Die Zuordnung *Zielzustand → 8-Byte-Payload* ist **deterministisch** (bewiesen
+durch 4 Wiederholungen im Capture). Deshalb ist **keine Entschlüsselung nötig** —
+eine Lerntabelle reicht.
 
-- [ ] 0.25 mm Kynar-Draht auf TX und GND löten
-- [ ] Remote TX → Pico W GP1 (UART RX)
-- [ ] Remote GND → Pico W GND
-- [ ] MicroPython-Script auf Pico laden:
-  ```python
-  from machine import UART, Pin
-  uart = UART(0, baudrate=115200, tx=Pin(0), rx=Pin(1), timeout=10)
-  while True:
-      data = uart.read(64)
-      if data:
-          print(" ".join("{:02X}".format(b) for b in data),
-                "".join(chr(b) if 0x20<=b<0x7F else "." for b in data))
-  ```
-- [ ] Remote-Batterie rein, Pico per USB → `mpremote connect` oder PuTTY
-- [ ] Button drücken und Output beobachten
-  - Ausgabe vorhanden → Button-Codes direkt sichtbar ✓
-  - Nur Boot-Banner → UART aktiv aber kein Button-Log
-  - Nichts → UART im Release-Build deaktiviert → weiter zu Prio 3
-- [ ] Falls Müll: Baudrate testen (57600, 38400, 9600)
+- [ ] Remote an einen Fan binden (sonst nur Idle-Heartbeats!)
+      - Fan: *Head-shaking + Timer* → 4 LEDs blinken
+      - Remote: *Power + M* → 8 LEDs blinken
+      - Taste am Fan → Bind + Bestätigungston
+- [ ] ESPHome-Fan als **passiven Scanner** danebenstellen (`ble_remote: true`)
+- [ ] Jede Aktion einzeln auslösen, Payload + resultierenden Fan-Zustand notieren:
+      - Power ⏻ (kurz) → On/Off
+      - M kurz → Speed-Cycle (4 Stufen = 4 Payloads)
+      - M lang → Modus-Cycle (Direct/Natural/Smart = 3 Payloads)
+      - Head-shaking ∿ → Oszillation On/Off
+      - Clock 🕐 → Timer-Cycle (0/1/2/3/4h = 5 Payloads)
+- [ ] Tabelle in PROTOCOL.md eintragen (Payload ↔ Zielzustand)
+- [ ] Prüfen: liefert **unsere** Remote (`4B:F2:7E:47:E5:6E`) dieselben Chiffrate
+      wie im alten 23-Payload-Capture? Wenn ja → Tabelle direkt wiederverwendbar
 
----
+### Offene Frage zur Architektur
 
-## 🟢 Prio 3: Firmware-Dump via SWD (wenn ST-Link V2 da)
-
-Lötpunkte: **SWC**, **SWD**, **GND** (+ optional **RST**) auf Debug-Header
-
-- [ ] Drähte auf SWC, SWD, GND löten
-- [ ] **Option A — ST-Link V2 + SmartSnippets Toolbox** (empfohlen):
-  - SmartSnippets Toolbox installieren (kostenlos, Renesas/Dialog)
-  - SWC→SWCLK, SWD→SWDIO, GND→GND
-  - "Read SPI Flash" → `remote_flash.bin`
-- [ ] **Option B — Pico W als picoprobe** (falls ST-Link nicht klappt):
-  - picoprobe-UF2 auf Pico flashen
-  - SWC→GP3, SWD→GP2, GND→GND
-  - OpenOCD: `openocd -f interface/cmsis-dap.cfg -c "transport select swd" -f target/cortex_m.cfg`
-  - RAM/OTP lesen; SPI-Flash via CPU-Register
-- [ ] Firmware-Binary analysieren:
-  ```bash
-  strings remote_flash.bin | grep -iE "button|press|speed|power|mode"
-  binwalk remote_flash.bin
-  ```
+Die Lerntabelle ist **pro Remote** (an den Bond gekoppelt). Für andere Nutzer
+braucht es einen **Learn-Mode** in der Komponente statt fest kodierter Werte.
+→ Design-Entscheidung nötig, bevor Phase 3 implementiert wird.
 
 ---
 
-## 🔵 Prio 4: Phase 3 — dm_fan.h Integration
+## 🟡 Prio 2: `0x1F44`-Fix verifizieren (Code bereits geändert)
 
-(erst wenn Button-Payload-Tabelle vollständig)
+`on_action1_()` sendete `data_len=0`, die echte Firmware sendet
+`data_len=1, data=[0x01]` ("agree to pair"). Fix ist eingebaut, **noch nicht
+auf Hardware getestet**.
 
-- [ ] `PROTOCOL.md` Per-Button-Tabelle ausfüllen
-- [ ] Nativen GATTC-Handler in `dm_fan.h` implementieren:
-  - `on_connect` → FF01 lesen → Challenge-Echo an FF02
-  - `on_gattc_notify` (FF01) → Payload dekodieren → Fan-Aktion aufrufen
-  - State-Machine: IDLE → ECHO_SENT → BOUND
-- [ ] `ble_remote: true` in `dm_fan.yaml` aktivieren
-- [ ] `ble_capture.yaml` entfernen / archivieren
-- [ ] Tag `v4.0.0` erstellen (stable release)
+- [ ] Flashen und am Fan *Head-shaking + Timer* halten
+- [ ] Log prüfen: `MCU remote-pairing trigger (0x1F44) → ACK agree=1`
+- [ ] Prüfen ob der Fan jetzt tatsächlich in den Pairing-Modus geht
+      (vorher evtl. blockiert durch das unvollständige ACK)
+- [ ] Falls ja: das war ein echter Blocker für das gesamte Pairing über ESPHome
+
+---
+
+## 🟢 Prio 3: GATT-Weg — Status klären
+
+Der Challenge-Echo (FF01→FF02) **funktioniert** (Blinken stoppt), liefert aber
+keine Tastenevents. Vermutlich Teil des *Bind*-Protokolls, nicht des Kommandowegs.
+
+- [ ] Entscheiden: `ble_capture.yaml` weiter pflegen oder archivieren?
+- [ ] Falls Beacon-Weg (Prio 1) funktioniert → GATT nur noch fürs Binden nutzen
+
+---
+
+## 🔵 Prio 4: Phase 3 — dm_fan.h Implementierung
+
+(erst wenn Lerntabelle steht)
+
+- [ ] Beacon-Handler: `status=0x02` → Payload gegen Lerntabelle matchen
+- [ ] Gematchten Zustand auf die Fan-Entities anwenden
+- [ ] Learn-Mode: Payload + aktueller Fan-Zustand speichern (NVS/`restore_value`)
+- [ ] `ble_report_to_mcu` überdenken — brauchen wir den 0x1F41-Weg überhaupt,
+      wenn wir den Zustand direkt selbst setzen?
+- [ ] Tag `v4.0.0` (stable)
+
+---
+
+## ⚪ Prio 5: Hardware-Wege (beide bisher ergebnislos)
+
+- [ ] **Remote SWD**: ST-Link meldet `chipid: 0x000`, auch mit
+      `--connect-under-reset` → Debug-Port vermutlich gesperrt.
+      Verkabelungsfehler nicht 100 % ausgeschlossen (Spannung/Kontinuität
+      nicht durchgemessen). Niedrige Priorität, da Beacon-Weg trägt.
+- [ ] **Remote UART**: nur Rauschen mit lesbaren Fragmenten, kein
+      validiertes Frame extrahiert. Offene Hypothese: RTS/CTS-Flusskontrolle.
+- [ ] **Fan-MCU SWD**: noch nicht versucht — würde `0x1F41`-Format bestätigen
+
+---
+
+## 📝 Prio 6: Offene Doku-/Community-Aufgaben
+
+- [ ] **Korrektur in `dhewg/esphome-miot#50` posten**: unser alter Kommentar vom
+      19. Mai behauptet `action:81 / resource:0x70` für die WiFi-Query-Antwort.
+      Das war Spekulation aus dem Binary und ist **falsch** — korrekt ist
+      `action:82 / resource:0x78` (echot die Query-Resource).
+      Nachtrag-Kommentar, alten nicht löschen.
+- [ ] Flash-Backup Hälfte 2 (`0x200000`–`0x400000`) des gepairten Fans
+      nachziehen — Hälfte 1 ist sauber gesichert
+
+---
+
+## 🔒 Sicherheitshinweis
+
+Aus dem gepairten NVS-Dump stammen **echte Geräte-Secrets** (`ble_key`,
+`device_key`, `device_id`, WiFi-Zugangsdaten). Diese sind **bewusst nicht** in
+diesem öffentlichen Repo dokumentiert — nur Struktur und Fundort. Lokal halten.

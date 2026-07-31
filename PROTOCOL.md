@@ -43,7 +43,9 @@ Without a response the MCU pulls EN pin LOW → POWERON_RESET after ~4 minutes.
 
 ```
 1. ESP → MCU: action:2,  resource:0x232A  (request full state)
-2. MCU → ESP: action:82, resource:0x232A, data:80 bytes  (total frame ~89 bytes)
+2. MCU → ESP: action:82, resource:0x232A, data_length:0x80 = **128 bytes**
+              (total frame length:89 — note the log prints length in decimal
+               but data_length in hex; earlier docs mis-read 0x80 as "80 bytes")
              → contains version strings incl. mcu_version "fan_0001"
 3. MCU → ESP: periodic state reports (action:84, resource:0x2347)
 ```
@@ -118,7 +120,23 @@ Timer: len=0x0D, sub_len=04, uint16 BE minutes
 | Resource | Meaning | ESPHome response |
 |----------|---------|-----------------|
 | 0x238D | Reset ESP | ACK `action:81` + ignore |
-| 0x1F44 | Start WiFi provisioning | ACK `action:81` + ignore |
+| 0x1F44 | **Remote-pairing trigger** | ACK `action:81` with `data_len=1, data=[0x01]` = "agree" |
+
+> ⚠️ **Corrected 2026-07-31:** `0x1F44` was previously documented as "Start WiFi
+> provisioning". It is actually the **remote-pairing trigger**, confirmed live:
+> holding *Head-shaking + Timer* on the fan emits repeated `0x1F44` frames.
+>
+> ```
+> MCU→ESP: FA CE 00 0A 01 1F 44 [msg_id 4B] 00 01 [data] [chk]
+> ESP→MCU: FA CE 00 0A 81 1F 44 [msg_id 4B] 00 01  01    [chk]
+>                                                   └─ 0x01 = "agree to pair"
+> ```
+>
+> The original firmware always answers `data=[0x01]` regardless of the request
+> byte → the **answer** byte carries the agree(1)/unagree(0) decision. Matching
+> MCU log strings in the firmware binary: `BLE->mcu agree to pair!`,
+> `BLE->mcu unagree to pair!`, `BLE->mcu report timeout!`.
+> Our ACK previously sent `data_len=0` — fixed in `on_action1_()`.
 
 ---
 
@@ -188,9 +206,9 @@ ServiceData UUID), the manufacturer data is:
 |--------|-------|-------|-------|
 | 0–1 | `02 01` | Protocol version | observed 2.1 |
 | 2–7 | 6 | Device MAC | BLE byte order |
-| 8 | 1 | **Sequence counter** | increments ~every 20 s / on activity |
-| 9 | 1 | Status | `0x01` = idle |
-| 10–17 | 8 | Payload | all-zero when idle; button data when active |
+| 8 | 1 | **Sequence counter** | increments per event; **resets to `0x01` on re-pair** |
+| 9 | 1 | **Status** | `0x01` = idle heartbeat · `0x02` = **command / button press** |
+| 10–17 | 8 | Payload | all-zero when `status=0x01`; **8-byte encrypted command when `status=0x02`** |
 
 Captured 2026-06-01 (idle): `4B:F2:7E:47:E5:6E`, company `DM`,
 `02 01 4B F2 7E 47 E5 6E 0B 01 00 00 00 00 00 00 00 00`.
@@ -199,11 +217,77 @@ The `dm_fan` component decodes this when `ble_remote: true` and logs every
 beacon. Changed counter/status/payload → `INFO` (button event), repeated idle
 heartbeat → `DEBUG`.
 
-**Confirmed 2026-06-10 on hardware:** the payload `[10..17]` stays all-zero even
-during button presses / pairing-mode rapid advertising. The advertisement is a
-pure *heartbeat* — **button commands do NOT travel over advertisements, they go
-over a GATT connection** (the remote is `connectable: true`). Phase 3 (GATT) is
-required for button reception; see below.
+### ⭐ CORRECTION 2026-07-31 — buttons DO travel over advertisements
+
+> An earlier note here claimed the payload `[10..17]` "stays all-zero even during
+> button presses" and that button commands therefore only travel over GATT.
+> **That was wrong** — it was measured while the remote was **unbound**. A
+> verified capture from a *paired* setup shows the opposite.
+
+**Verified capture** (ESPHome fan as passive BLE scanner next to remote
+`4B:F2:7E:47:E5:6E` — the *same* remote as ours — while it was paired with an
+original fan): **27 button presses produced 23 distinct 8-byte payloads**, all
+with `status=0x02`.
+
+```
+Time          Ctr   St    Payload (8 bytes)
+02:16:26.376  02    02    05 88 22 7D D3 30 9E A3   [A]
+02:16:32.312  03    02    EF 8E 65 38 46 18 6C 8A   [B]
+02:16:39.467  04    02    05 88 22 7D D3 30 9E A3   [A]  ← repeat of ctr=02
+02:16:41.106  05    02    EF 8E 65 38 46 18 6C 8A   [B]  ← repeat of ctr=03
+02:16:41.719  06    02    61 93 BE 5B 57 53 8E D5   [C]
+02:16:43.054  07    02    F4 F9 1D D5 2E 70 E6 F0   [D]
+02:16:44.383  08    02    7E D8 93 D7 D3 9E 9A 62   [E]
+02:16:47.147  09    02    CF C2 F6 D7 26 AD 3E A0   [F]
+02:16:50.219  0A    02    E0 25 AE 86 F2 FC 42 56   [G]
+02:16:52.788  0B    02    E6 BC A0 D5 97 6C 77 77   [H]
+02:16:56.878  0C    02    E0 25 AE 86 F2 FC 42 56   [G]  ← repeat of ctr=0A
+02:16:57.080  0D    02    CC AD 56 30 EF AF 6C 37   [I]
+02:16:58.207  0E    02    29 A3 26 28 22 64 2A 62   [J]
+02:16:59.445  0F    02    BC 24 D9 73 2E C5 AE 30   [K]
+02:17:01.402  10    02    6B FC 90 AB 09 EE 10 DA   [L]
+02:17:02.632  11    02    FF 81 17 0C 2A 7B 8A 49   [M]
+02:17:04.351  12    02    C4 56 E7 AA 95 40 E3 60   [N]
+02:17:05.694  13    02    5F 0F EC 59 BF 6E CC AC   [O]
+02:17:06.602  14    02    89 EE EA 0A 1D A1 18 EB   [P]
+02:17:09.176  15    02    1C E8 F1 50 76 C0 22 77   [Q]
+02:17:12.650  16    02    CC C3 C4 81 AD D6 CC C3   [R]
+02:17:15.430  17    02    C5 8C E2 70 F9 15 15 8F   [S]
+02:17:16.126  18    02    EF DE 0C 5D 29 7D BC E8   [T]
+02:17:19.614  19    02    D0 F8 61 D6 CA F3 D2 BD   [U]
+02:17:21.042  1A    02    EF DE 0C 5D 29 7D BC E8   [T]  ← repeat of ctr=18
+02:17:46.846  1B    01    -- idle --
+02:18:06.003  1C    01    -- idle --
+02:18:30.574  1D    01    -- idle --
+02:18:34.891  01    02    4C 37 3B 18 8E 9D 61 A9   [V]  ← after re-pair, ctr reset!
+02:18:36.101  02    02    33 BB 4A B9 BE BE 04 20   [W]
+```
+
+**Conclusions — these drive the whole Phase 3 design:**
+
+1. **Payload is independent of the counter.** Four repeats ([A]@02+04, [B]@03+05,
+   [G]@0A+0C, [T]@18+1A) prove **no rolling code**: the same target state always
+   produces the same ciphertext. Deterministic, ECB-like.
+2. **23 distinct payloads for 27 presses** — far more than the 4 physical buttons.
+   The payload most likely encodes the **complete target state** (mode + speed +
+   oscillation + …), not a single button ID. Consistent with the remote's LEDs
+   mirroring fan state.
+3. **Encrypted, but statistically a real block cipher** (bit balance ≈51%, full
+   byte variance at all 8 positions) — not simple XOR/obfuscation.
+4. **Idle heartbeats continue while unbound** (`status=0x01`) — which is exactly
+   what our earlier unbound measurement saw, hence the wrong conclusion.
+5. **Counter resets to `0x01` after re-pairing** — a useful "freshly paired" marker.
+
+### 🔑 Key consequence: no crypto break needed
+
+Because the mapping *target-state → 8-byte payload* is **deterministic**, we do
+**not** need to decrypt anything. A **learn/teach-in table** is sufficient:
+record the payload for each state once, then match incoming payloads against the
+table and apply the stored state. This is how classic RF-remote integrations work
+and it sidesteps the cipher entirely. The table is per-remote (tied to its bond),
+so it must be learned per user — a "learn mode" in the component.
+
+**This replaces the previous GATT-only plan as the primary Phase 3 route.**
 
 ### UART forward to MCU — resource `0x1F41` (EXPERIMENTAL, unconfirmed)
 
@@ -228,7 +312,7 @@ MCU→ESP (action:82): FA CE 00 0A 82 1F 41 ... 01 [chk]   (ACK, value 0x01)
 | 2000 | 0x07D0 | 1 | Boot device-announce (MAC, SSID, model) |
 | 2004 | 0x07D4 | 2/4 | Get/Set property |
 | 8001 | 0x1F41 | 2/82 | **BLE remote beacon / pairing** |
-| 8004 | 0x1F44 | 1/81 | Provisioning start (WiFi reset) |
+| 8004 | 0x1F44 | 1/81 | **Remote-pairing trigger** (fan: Head-shaking + Timer) |
 | 9002 | 0x232A | 2/82 | Boot state request |
 | 9013 | 0x2335 | 4 | Set command (alternative path) |
 | 9031 | 0x2347 | 84/82 | Fan state push / WiFi response |
@@ -362,20 +446,62 @@ We replaced the Tuya module with ESPHome. The handshake turned out to be a
 **plain echo** (no AES), not the encrypted Tuya bind we feared. Once the
 per-button table is complete, dm_fan.h Phase 3 can be implemented.
 
-**Revised path forward (replaces the optimistic "no crypto" note above):**
-- *Cheap test first:* `ble_capture.yaml` now has HS1–HS4 handshake buttons.
-  Press them while connected and watch the remote LED — if any write stops the
-  blinking and unlocks notifications, the handshake is trivial and we win.
-- *If HS1–HS4 fail:* the bind requires the Tuya key-exchange. The most reliable
-  route is the **SWD dump of the remote (DA14580)** — it contains the GATT
-  pairing logic and the bind-key derivation in cleartext. Dumping the **original
-  ESP module firmware** is the alternative (it held the Tuya BLE SDK + any stored
-  bind key; note NVS showed `ble_model=0` / `ble_key` zeroed = the remote was
-  never bound to *this* fan, so the key must be derived during a fresh local
-  pairing, not imported).
-- Beacon transport is ruled out: the advertisement payload `[10..17]` stays
-  all-zero during button presses (confirmed), and the DA14580 (BLE 4.x) does not
-  use extended advertising — so buttons do not travel over the beacon.
+**Revised path forward (2026-07-31 — supersedes the GATT-only plan above):**
+
+- ✅ **Beacon transport is the primary route, NOT GATT.** The earlier "beacon
+  ruled out" note was based on an *unbound* remote and is retracted — see the
+  23-payload capture above. Buttons are broadcast as `status=0x02`
+  advertisements with an 8-byte encrypted payload.
+- ✅ **No crypto break required** — the state→payload mapping is deterministic,
+  so a learn-table matches payloads without decryption.
+- 🔄 **Bonding still matters**, but only to make the remote *emit* `status=0x02`
+  beacons at all: an unbound remote sends idle heartbeats only. The fan-side
+  pairing trigger is `0x1F44` (Head-shaking + Timer); the remote-side combo is
+  Power + M.
+- ❓ **GATT challenge-echo** (FF01→FF02, documented above) still works and stops
+  the blinking, but produced **no** button notifications. It is most likely part
+  of the *bind* protocol, not the command path. Keep it for binding; stop
+  expecting button data from it.
+- ⏸️ **SWD dump of the remote (DA14580)** is now lower priority. It was also
+  attempted and failed: ST-Link reports `chipid: 0x000` even with
+  `--connect-under-reset` → debug port appears locked (a wiring fault was not
+  fully excluded).
+
+### Bond state in NVS — where the fan stores its remote binding
+
+A **genuinely paired** original fan (`mcu_version: fan_0002`) was dumped and its
+NVS decoded. Relevant keys:
+
+| NVS key | Type | Content |
+|---------|------|---------|
+| `ble_model` | u16 LE | `0x0201` = **513** — non-zero means *paired* (`0` = unpaired) |
+| `ble_mac` | blob 6 B | the bound remote's MAC — matched `4B:F2:7E:47:E5:6E` exactly |
+| `ble_key` | blob 8 B | the bond / beacon key (**value kept out of this repo**, see note) |
+
+> **NVS blob gotcha:** for `type=0x41` (blob) with `span=2`, the actual blob
+> bytes are **not** in the entry's 8-byte data field (that holds
+> `[size_lo, size_hi, chunk_idx, reserved, crc32(4B)]`) but at the **start of the
+> next 32-byte block**. NVS is wear-levelled, so several copies of each key exist —
+> use the one with a real CRC, not `ffffffff`.
+
+> 🔒 The concrete `ble_key` / `device_key` / WiFi credentials from that dump are
+> **deliberately not committed** to this public repo. They are per-device secrets.
+> Keep them in local notes only.
+
+Boot log confirms the state in cleartext: `DM-LOG: BLE:paired model:513`
+(format string `BLE:paired model:%d` at `0x0046B2` in the firmware image). The
+marker appears **only on cold boot**, never during normal operation.
+
+Four earlier reference dumps (all MAC `98:F4:AB:24:FF:F8`) had `ble_model=0` and
+empty `ble_key`/`ble_mac` — **that fan was never successfully paired**, across
+March 2025 → May 2026. This retroactively explains why the fake-MCU testbench
+built on that image never triggered any BLE reaction.
+
+**Crypto assessment:** the firmware uses **standard ESP-IDF Bluedroid** bonding —
+strings `btc_ble_storage`, `btm_ble_set_encryption`, `btm_ble_ltk_request_reply`
+are stock stack functions, no proprietary AES/XXTEA. Combined with the
+deterministic beacon mapping, this means the remaining unknown is the beacon
+cipher, which the learn-table approach makes unnecessary to solve.
 
 ---
 
@@ -430,3 +556,115 @@ logic in cleartext, far more reliable than live GATT discovery.
 - ⚠️ DA1458x OTP may have a read-protection bit. **Read only first**, never write.
 - The DA14580 boots from OTP or external SPI flash (U1) — that flash holds the
   application image with the BLE GATT table and button-to-command mapping.
+
+---
+
+## Reference material (from firmware-binary + testbench analysis)
+
+Collected from a fake-MCU testbench (original firmware driven against a
+simulated MCU over UART) and from strings/offsets in `ota_0_0x110000.bin`.
+
+### `0x0078` WiFi-query response — full 56-byte structure
+
+The MCU's periodic WiFi query is answered with a 0x44-length frame whose payload
+decodes as three null-padded ASCII fields plus status bytes:
+
+```
+FA CE 00 44 82 00 78 [msg_id 4B] 00 3B
+64 6D 69 6F 74 5F 76 31 2E 31 2E 30 00 00 00 00   "dmiot_v1.1.0"  (16 B)
+7A 65 69 63 6F 5F 33 2E 30 2E 30 00 00 00 00 00   "zeico_3.0.0"   (16 B)
+35 63 30 31 33 62 62 66 36 30 64 63 00 00 00 00   "5c013bbf60dc"  (16 B)
+00 00 00 00 01 00 01 02 00 02                     status bytes    (8 B)
+[checksum]
+```
+
+| Offset | Len | Content |
+|--------|-----|---------|
+| 0 | 16 | `comm_version`, ASCII, null-padded |
+| 16 | 16 | `firmware_version`, ASCII, null-padded |
+| 32 | 16 | 12-hex-digit device/chip ID, ASCII (device-specific) |
+| 48 | 8 | status bytes, meaning unclear |
+
+Our `on_wifi_query_()` currently sends zero bytes in these fields. That works
+(it prevents the MCU reset) but reports no real versions — this layout would
+allow publishing genuine values as diagnostic sensors.
+
+### State payload byte layout — 9-byte prefix (verified)
+
+Verified 1:1 against a real frame (25.7 °C / 63.0 % / 70 % speed / 90°). Note the
+prefix is **9** bytes, not 8 as an earlier JSON-derived guess assumed:
+
+```
+data[0:9]   prefix (deviceException / useException / reserved, usually 0)
+data[9]     power
+data[10]    speed
+data[11]    mode
+data[12]    roll_enable (oscillation)
+data[13]    roll_angle
+data[14:16] power_delay (timer, uint16 BE)
+data[16]    sound
+data[17]    light (LED)
+data[18]    child_lock
+data[19:23] temperature (float LE)
+data[23:27] humidity (float LE)
+```
+
+### `deviceException` values
+
+| Value | Bits | Meaning |
+|-------|------|---------|
+| `0x400000` | 22 | normal |
+| `0xC00000` | 22+23 | error combination |
+| `0x800000` | 23 only | **third value, meaning unknown** (seen with `"source":"manual"`) |
+
+### `ext1`–`ext6` — fragmented `product_id`
+
+All six `ext` fields are constant across state frames and together encode a
+substring of the device's own `product_id` as ASCII (6 × 4-byte chunks):
+
+```
+ext1=97  → 'a'      ext2=102 → 'f'      ext3/ext4 → 2 chars each
+ext5=943206968 → 4 chars                ext6=1630823777 → 4 chars
+combined: "af43818828a4ea" = product_id[3:17]
+```
+
+Device-specific but always the same encoding scheme. Static — irrelevant for
+control, documented so nobody re-investigates it.
+
+### Flash partition table (from boot log)
+
+| Label | Type/ST | Offset | Size |
+|-------|---------|--------|------|
+| nvs | 01/02 | `0x009000` | 16 KB |
+| otadata | 01/00 | `0x00D000` | 8 KB |
+| phy_init | 01/01 | `0x00F000` | 4 KB |
+| factory | 00/00 | `0x010000` | 1 MB |
+| ota_0 | 00/10 | `0x110000` | 1 MB |
+| ota_1 | 00/11 | `0x210000` | 1 MB |
+
+### Firmware string offsets (`ota_0_0x110000.bin`)
+
+```
+0x0000AC  "cloud1.dm-maker.com"
+0x0000C4  "api2.dm-maker.com"
+0x0046B2  "BLE:paired model:%d"
+0x004C28  "dmiot_ble_init"
+0x00539A  "received_ap->ssid:%s,key:%s,mark:%s"
+0x0053D6  "BLE->mcu agree to pair!"
+0x005406  "BLE->mcu unagree to pair!"
+0x00543A  "BLE->mcu report timeout!"
+0x00AC10  "btc_ble_storage"
+0x00EC0A  "btm_ble_set_encryption"
+0x00ECAE  "btm_ble_ltk_request_reply"
+```
+
+### External validation
+
+Independent app-based TX captures by a community member (BobeOlsen, in
+`dhewg/esphome-miot#50`) confirm this resource mapping 1:1, including the exact
+angle bytes (`0x1E/3C/78/8C`) and timer values (`0x3C/78/B4/F0`).
+
+> ⚠️ An older comment of ours in that thread speculated the WiFi-query response
+> was `action:81 / resource:0x70`. That was never verified and is **wrong** — the
+> confirmed answer is `action:82 / resource:0x78` (echoes the *query* resource).
+> A correction note in that thread is still outstanding.

@@ -461,19 +461,40 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
   }
 
   // ── Generic ACK for MCU action:1 commands ─────────────────────────────────
-  // 0x238D = reset command  → ACK + ignore (ESPHome does not reboot on demand)
-  // 0x1F44 = provisioning   → ACK + ignore
-  // Others                  → ACK + log
+  // 0x238D = reset command    → ACK + ignore (ESPHome does not reboot on demand)
+  // 0x1F44 = remote pairing   → ACK with data=[0x01] ("agree to pair")
+  // Others                    → ACK + log
+  //
+  // Frame format confirmed against original firmware on a fake-MCU testbench:
+  //   MCU→ESP: FA CE 00 0A 01 1F 44 [msg_id 4B] 00 01 [data] [chk]
+  //   ESP→MCU: FA CE 00 0A 81 1F 44 [msg_id 4B] 00 01 01   [chk]
+  //                                                    └─ data=0x01 = "agree"
+  // The original firmware always answers data=[0x01] regardless of the request
+  // data byte, so the ANSWER byte carries the agree(1)/unagree(0) decision.
+  // Our previous ACK sent data_len=0 (no data byte) — the MCU logs
+  // "BLE->mcu unagree to pair!" / times out in that case.
   void on_action1_(uint8_t res_hi, uint8_t res_lo) {
     uint16_t res = ((uint16_t)res_hi << 8) | res_lo;
-    uint8_t f[14] = {MAGIC_0, MAGIC_1, 0x00, 0x09, 0x81,
-                     res_hi, res_lo, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    // Echo the request msg_id when the frame is long enough to carry one.
+    uint8_t m0 = 0x01, m1 = 0x00, m2 = 0x00, m3 = 0x00;
+    if (parse_len_ >= 7) {
+      m0 = parse_buf_[3]; m1 = parse_buf_[4];
+      m2 = parse_buf_[5]; m3 = parse_buf_[6];
+    }
+    // Only 0x1F44 is confirmed to need the trailing agree byte. Other action:1
+    // resources (e.g. 0x238D reset) keep the original data_len=0 ACK, since
+    // their real response format was never captured.
+    const bool agree = (res == 0x1F44);
+    uint8_t f[15] = {MAGIC_0, MAGIC_1, 0x00, (uint8_t)(agree ? 0x0A : 0x09), 0x81,
+                     res_hi, res_lo, m0, m1, m2, m3,
+                     0x00, (uint8_t)(agree ? 0x01 : 0x00), 0x01, 0x00};
+    const uint8_t len = agree ? 15 : 14;
     uint8_t chk = 0;
-    for (int i = 0; i < 13; i++) chk += f[i];
-    f[13] = chk;
-    write_array(f, 14);
+    for (int i = 0; i < len - 1; i++) chk += f[i];
+    f[len - 1] = chk;
+    write_array(f, len);
     if      (res == 0x238D) ESP_LOGD(TAG, "MCU reset cmd (0x238D) → ACK, ignoring");
-    else if (res == 0x1F44) ESP_LOGD(TAG, "MCU provisioning cmd (0x1F44) → ACK, ignoring");
+    else if (agree)         ESP_LOGI(TAG, "MCU remote-pairing trigger (0x1F44) → ACK agree=1");
     else                    ESP_LOGD(TAG, "MCU action:1 res=0x%04X → ACK", res);
   }
 
