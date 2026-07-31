@@ -6,13 +6,18 @@
 #   Zielzustand → Payload ist DETERMINISTISCH (bewiesen durch Wiederholungen),
 #   deshalb ist keine Entschlüsselung nötig — eine Lerntabelle reicht.
 #
-#   Diese YAML loggt pro Tastendruck EINE Zeile mit Payload UND dem daraus
-#   resultierenden Fan-Zustand:
+#   Diese YAML loggt pro Tastendruck EINE Zeile:
 #
-#     [W][dm_learn] LEARN #3 | payload= 05 88 22 7D D3 30 9E A3 | -> power=ON
-#                   speed=25 mode=direct(0) osc=OFF angle=90 timer=0.0h
+#     [W][dm_learn] LEARN #3 | Power        | ctr=4E | payload= 92 43 A0 3F A6 59 2F AA
 #
-#   Diese Zeilen direkt in PROTOCOL.md übertragen → Lerntabelle fertig.
+#   ⚠️ WARUM EIN LABEL STATT DES FAN-ZUSTANDS?
+#   Eine frühere Fassung loggte den Fan-Zustand nach dem Tastendruck. Das ist
+#   sinnlos: seit ESPHome drauf ist, reagiert der Fan NICHT mehr auf die
+#   Fernbedienung (die Beacons werden nicht an die MCU weitergeleitet). Der
+#   Zustand blieb deshalb immer power=OFF speed=0.
+#   Stattdessen wird jetzt in HA über das Select "Lern-Label (Taste)"
+#   eingestellt, welche Taste gerade getestet wird — dieser Text steht in
+#   jeder LEARN-Zeile.
 #
 # ⚠️ WICHTIG — VOR DEM FLASHEN LESEN
 #   1. NVS SICHERN! Der aktuell gepairte Fan hat den Bond im NVS
@@ -28,13 +33,22 @@
 #   wir gleichen nur Payloads ab. Der Key wäre nur für generisches Entschlüsseln
 #   nötig — und dessen Algorithmus ist ohnehin unbekannt.
 #
-# ABLAUF
+# ABLAUF — eine Taste pro Serie, damit die Zuordnung eindeutig bleibt
 #   1. Flashen, Log öffnen: esphome logs ble_remote_test.yaml
-#   2. Eine Taste drücken, ~3 s warten, bis die LEARN-Zeile erscheint.
-#   3. Nächste Taste. Immer nur EINE Aktion pro Schritt.
-#   4. Alle 5 Aktionen durchgehen (Power, Speed-Cycle, Modus-Cycle,
-#      Oszillation, Timer-Cycle) — Speed/Modus/Timer mehrfach für jede Stufe.
-#   5. LEARN-Zeilen in PROTOCOL.md eintragen.
+#   2. In HA "Lern-Label (Taste)" auf z. B. "Power" stellen.
+#   3. NUR diese Taste drücken — mehrfach, mit ~2 s Pause:
+#        Power       6× (An/Aus/An/Aus/An/Aus → erwartet 2 abwechselnde Payloads)
+#        Speed       8× (2 volle Zyklen à 4 Stufen → erwartet 4 Payloads)
+#        Mode-lang   6× (2 volle Zyklen à 3 Modi → erwartet 3 Payloads)
+#        Oszillation 4× (erwartet 2 abwechselnde Payloads)
+#        Timer      10× (2 volle Zyklen à 5 Stufen → erwartet 5 Payloads)
+#   4. Label umstellen, nächste Taste. Immer nur EINE Taste pro Serie.
+#   5. LEARN-Zeilen schicken/in PROTOCOL.md eintragen.
+#
+#   Der Zyklus-Ansatz ist der Trick: wenn eine Taste durchzykelt und wieder am
+#   Anfang landet, MUSS sich die Payload wiederholen. Daraus ergibt sich, wie
+#   viele Zustände es gibt und welche Payload zu welcher Stufe gehört — ganz
+#   ohne dass der Fan reagieren muss.
 #
 # ⚠️ scan window 300ms bei interval 320ms = ~94% BLE-Duty-Cycle. WLAN und BLE
 #    teilen sich beim ESP32 eine Antenne → mögliche WLAN-Aussetzer. Nur zum
@@ -160,12 +174,18 @@ esp32_ble_tracker:
               ESP_LOGI("dm_remote", "%s CMD st=%02X ctr=%02X payload= %s",
                        x.address_str().c_str(), st, ctr, pl.c_str());
               // Wiederholte Beacons desselben Tastendrucks unterdrücken:
-              // gleicher Counter = dasselbe Event.
+              // gleicher Counter = dasselbe Event. Die Remote sendet jeden
+              // Tastendruck bis zu ~150× — nur der Counter-Wechsel zählt.
               if (ctr != id(last_ctr)) {
                 id(last_ctr) = ctr;
                 id(last_payload) = pl;
                 id(cmd_count) += 1;
-                id(log_state_after_cmd).execute();
+                // SOFORT loggen, nicht verzögert: der Fan reagiert nicht mehr
+                // auf die Remote, ein späterer Zustand bringt also nichts —
+                // und eine Verzögerung würde bei schnellen Tastenfolgen
+                // Events verschlucken.
+                ESP_LOGW("dm_learn", "LEARN #%d | %-12s | ctr=%02X | payload= %s",
+                         id(cmd_count), id(learn_label).c_str(), ctr, pl.c_str());
               }
             }
           }
@@ -184,34 +204,16 @@ globals:
     type: int
     restore_value: no
     initial_value: '0'
+  # Welche Taste gerade getestet wird — über das Select in HA gesetzt.
+  # Der Fan reagiert NICHT mehr auf die Fernbedienung (ESPHome leitet die
+  # Beacons nicht an die MCU weiter), deshalb kann die Bedeutung einer Payload
+  # nicht aus dem Fan-Zustand abgelesen werden — sie muss beschriftet werden.
+  - id: learn_label
+    type: std::string
+    restore_value: no
+    initial_value: '"?"'
 
-# Nach einem Kommando-Beacon 2 s warten (bis die MCU den neuen Zustand
-# gemeldet hat) und dann Payload + Ergebniszustand in EINER Zeile loggen.
-# mode: restart → bei schnellen Tastenfolgen wird nur der letzte Stand geloggt.
-script:
-  - id: log_state_after_cmd
-    mode: restart
-    then:
-      - delay: 2s
-      - lambda: |-
-          auto *f = id(my_fan);
-          // Mode/Winkel/Timer über die public Getter von DmFan — fan::Fan
-          // selbst hält preset_mode_ private, deshalb nicht darüber gehen.
-          const uint8_t m = f->get_mode();
-          const char *mode_name = (m == 0) ? "direct"
-                                : (m == 1) ? "natural"
-                                : (m == 2) ? "smart" : "?";
-          ESP_LOGW("dm_learn",
-                   "LEARN #%d | payload= %s| -> power=%s speed=%d mode=%s(%u) "
-                   "osc=%s angle=%d timer=%.1fh",
-                   id(cmd_count),
-                   id(last_payload).c_str(),
-                   f->state ? "ON" : "OFF",
-                   f->speed,
-                   mode_name, (unsigned) m,
-                   f->oscillating ? "ON" : "OFF",
-                   f->get_roll_angle(),
-                   f->get_timer_hours());
+# Kein Verzögerungs-Script mehr — es wird direkt in der Beacon-Lambda geloggt.
 
 # ── Fan ──────────────────────────────────────────────────────────────────────
 # ble_remote bleibt aus (default false) — das Scannen macht die Lambda oben.
@@ -234,6 +236,24 @@ fan:
 
 # ── Selects: Winkel ──────────────────────────────────────────────────────────
 select:
+  # ── Lern-Label ─────────────────────────────────────────────────────────────
+  # VOR jeder Testreihe hier einstellen, welche Taste getestet wird. Der Wert
+  # landet in jeder LEARN-Zeile, damit die Payload zugeordnet werden kann.
+  - platform: template
+    name: "Lern-Label (Taste)"
+    icon: "mdi:tag"
+    optimistic: true
+    initial_option: "?"
+    options:
+      - "?"
+      - "Power"
+      - "Speed"
+      - "Mode-lang"
+      - "Oszillation"
+      - "Timer"
+    set_action:
+      - lambda: 'id(learn_label) = x;'
+
   - platform: template
     name: "Oszillationswinkel"
     icon: "mdi:angle-obtuse"
