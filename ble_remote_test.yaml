@@ -9,8 +9,8 @@
 #   Diese YAML loggt pro Tastendruck EINE Zeile mit Payload UND dem daraus
 #   resultierenden Fan-Zustand:
 #
-#     [W][dm_learn] LEARN | payload= 05 88 22 7D D3 30 9E A3 | -> power=ON
-#                   speed=25 osc=OFF preset=Direct
+#     [W][dm_learn] LEARN #3 | payload= 05 88 22 7D D3 30 9E A3 | -> power=ON
+#                   speed=25 mode=direct(0) osc=OFF angle=90 timer=0.0h
 #
 #   Diese Zeilen direkt in PROTOCOL.md übertragen → Lerntabelle fertig.
 #
@@ -195,14 +195,23 @@ script:
       - delay: 2s
       - lambda: |-
           auto *f = id(my_fan);
+          // Mode/Winkel/Timer über die public Getter von DmFan — fan::Fan
+          // selbst hält preset_mode_ private, deshalb nicht darüber gehen.
+          const uint8_t m = f->get_mode();
+          const char *mode_name = (m == 0) ? "direct"
+                                : (m == 1) ? "natural"
+                                : (m == 2) ? "smart" : "?";
           ESP_LOGW("dm_learn",
-                   "LEARN #%d | payload= %s| -> power=%s speed=%d osc=%s preset=%s",
+                   "LEARN #%d | payload= %s| -> power=%s speed=%d mode=%s(%u) "
+                   "osc=%s angle=%d timer=%.1fh",
                    id(cmd_count),
                    id(last_payload).c_str(),
                    f->state ? "ON" : "OFF",
                    f->speed,
+                   mode_name, (unsigned) m,
                    f->oscillating ? "ON" : "OFF",
-                   f->preset_mode.empty() ? "-" : f->preset_mode.c_str());
+                   f->get_roll_angle(),
+                   f->get_timer_hours());
 
 # ── Fan ──────────────────────────────────────────────────────────────────────
 # ble_remote bleibt aus (default false) — das Scannen macht die Lambda oben.

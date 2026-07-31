@@ -590,7 +590,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
       "snd=%d led=%d lock=%d temp=%.1f°C hum=%.1f%% echo=%u",
       n.power, n.speed, mode_name_(n.mode), n.oscillation,
       byte_to_angle(n.roll_angle), n.timer_min,
-      n.sound, n.led, n.child_lock, temp, hum, echo
+      n.sound, n.led, n.child_lock, temp, hum, (unsigned) echo
     );
 
     // Sensors always publish — temp/hum are independent of fan-state flap handling.
@@ -607,7 +607,8 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
       // Keep the change-detection baseline current so the next spontaneous
       // frame is not flagged as a (redundant) state change.
       hw_state_ = n;
-      ESP_LOGD(TAG, "Echo of our cmd (ctr=%u) — HA already updated optimistically", echo);
+      ESP_LOGD(TAG, "Echo of our cmd (ctr=%u) — HA already updated optimistically",
+               (unsigned) echo);
       return;
     }
     // 2. Spontaneous frame (counter 0) arriving right after our command may be a
@@ -615,7 +616,8 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
     //    old value before our optimistic state settles. Physical button presses
     //    outside this window are reflected immediately (no blanket 300 ms block).
     if (millis() - last_control_time_ < STALE_GUARD_MS) {
-      ESP_LOGD(TAG, "Spontaneous frame within %u ms guard — skipping (stale?)", STALE_GUARD_MS);
+      ESP_LOGD(TAG, "Spontaneous frame within %u ms guard — skipping (stale?)",
+               (unsigned) STALE_GUARD_MS);
       return;
     }
 
@@ -666,7 +668,8 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
     f[15] = value;
     f[16] = checksum_(f, 16);
     write_array(f, 17);
-    ESP_LOGD(TAG, "TX: res=0x%02X val=0x%02X ctr=%u", resource, value, msg_counter_ - 1);
+    ESP_LOGD(TAG, "TX: res=0x%02X val=0x%02X ctr=%u", resource, value,
+             (unsigned) (msg_counter_ - 1));
   }
 
   void send_cmd_bool_(uint8_t resource, bool value) {
@@ -682,7 +685,8 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
     f[16] = (value     ) & 0xFF;
     f[17] = checksum_(f, 17);
     write_array(f, 18);
-    ESP_LOGD(TAG, "TX: res=0x%02X val=%u min ctr=%u", resource, value, msg_counter_ - 1);
+    ESP_LOGD(TAG, "TX: res=0x%02X val=%u min ctr=%u", resource, value,
+             (unsigned) (msg_counter_ - 1));
   }
 
   // ── BLE beacon → decode + log (+ optional MCU report) ──────────────────────
