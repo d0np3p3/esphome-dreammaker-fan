@@ -291,16 +291,40 @@ so it must be learned per user — a "learn mode" in the component.
 
 ### UART forward to MCU — resource `0x1F41` (EXPERIMENTAL, unconfirmed)
 
-In the original firmware the ESP forwards the beacon to the MCU:
+In the original firmware the ESP forwards the beacon to the MCU. **If the MCU is
+the side that decrypts the payload** — plausible, since the original ESP module
+was only the radio bridge — this makes the fan react to the remote again without
+breaking the cipher or building a learn table.
+
+**Corrected format (2026-08-01)** — now follows the same envelope as every other
+ESP→MCU frame:
 
 ```
-ESP→MCU (action:2): FA CE 00 0C 02 1F 41 [counter] [8-byte payload] [chk]
+ESP→MCU (action:2):
+FA CE | 00 11 | 02 | 1F 41 | [msg_counter 4B BE] | 00 | 08 | [8B payload] | chk
+└magic┘ └len ┘  cmd  └res─┘                        pad  len
+
+  len   = 0x11 = 17 payload bytes (cmd 1 + res 2 + counter 4 + pad 1 +
+                                   data_len 1 + data 8)
+  f[12] = 0x08  — bytes following, matches "data_length:8" in the original log
+
+Example: FA CE 00 11 02 1F 41 00 00 00 05 00 08 92 43 A0 3F A6 59 2F AA D4
+
 MCU→ESP (action:82): FA CE 00 0A 82 1F 41 ... 01 [chk]   (ACK, value 0x01)
 ```
 
-> ⚠️ Frame length/format reverse-engineered, **not yet confirmed on hardware**.
-> `BLE->mcu report timeout!` after 2 failures triggers `SW_CPU_RESET` (0x238D).
-> Gated behind `ble_report_to_mcu: true`, **off by default**.
+> **Previous format was wrong.** It used a single-byte beacon counter directly
+> after the resource, where the envelope expects a 4-byte message counter plus
+> pad and data_len — the MCU would have parsed garbage. Verified against the
+> confirmed rule that `f[12]` counts the bytes after it (holds for the
+> `send_cmd_byte_` frame: `data_len=3`, and for the `0x1F44` pair: `data_len=1`).
+
+> ⚠️ Still **not confirmed on hardware**. `BLE->mcu report timeout!` after 2
+> failures triggers `SW_CPU_RESET` (0x238D). Gated behind
+> `ble_report_to_mcu: true`, **off by default**.
+> **Open question:** whether the MCU also wants the beacon's own counter byte
+> somewhere in the frame — currently not sent.
+> **Success marker:** the INFO line `MCU ACKed BLE report (action:82 res:0x1F41)`.
 
 ### Full resource-ID map (from flash-firmware analysis)
 

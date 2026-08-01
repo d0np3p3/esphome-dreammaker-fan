@@ -740,17 +740,50 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
   }
 #endif
 
-  // EXPERIMENTAL — frame format reverse-engineered, not yet confirmed on hardware.
-  // FA CE 00 0C | 02 1F 41 | [counter] | [8-byte payload] | [chk]
-  void report_beacon_to_mcu_(uint8_t counter, const uint8_t *payload8) {
-    uint8_t f[17];
-    f[0] = MAGIC_0; f[1] = MAGIC_1; f[2] = 0x00; f[3] = 0x0C;
-    f[4] = 0x02;    f[5] = 0x1F;    f[6] = 0x41;
-    f[7] = counter;
-    for (int i = 0; i < 8; i++) f[8 + i] = payload8[i];
-    f[16] = checksum_(f, 16);
-    write_array(f, 17);
-    ESP_LOGD(TAG, "BLE→MCU report (res=0x1F41 ctr=%u) — EXPERIMENTAL", counter);
+  // ── BLE beacon → MCU report, resource 0x1F41 (EXPERIMENTAL) ───────────────
+  // Forwards the remote's raw 8-byte beacon payload to the MCU. If the MCU is
+  // the side that decrypts the payload (plausible — the original ESP module was
+  // only the radio bridge), this makes the fan react to the remote again with
+  // no need to break the cipher or build a learn table.
+  //
+  // Frame layout now follows the CONFIRMED envelope used by every other
+  // ESP→MCU frame (see build_cmd_header_ / the 0x1F44 pair):
+  //
+  //   FA CE | 00 11 | 02 | 1F 41 | [msg_counter 4B BE] | 00 | 08 | [8B payload] | chk
+  //   └magic┘ └len ┘  cmd  └res─┘                        pad  len
+  //
+  //   len   = 0x11 = 17 payload bytes (cmd 1 + res 2 + counter 4 + pad 1 +
+  //                                    data_len 1 + data 8)
+  //   f[12] = 0x08 — number of bytes that follow, matching the "data_length:8"
+  //           seen in the original firmware log for this resource.
+  //
+  // The PREVIOUS implementation was wrong: it used a single-byte beacon counter
+  // where the envelope expects a 4-byte message counter plus pad/data_len, so
+  // the MCU would have parsed garbage. That likely triggered the
+  // "BLE->mcu report timeout!" path (→ SW_CPU_RESET after 2 failures).
+  //
+  // STILL UNCONFIRMED: whether the MCU expects the beacon's own counter byte
+  // anywhere in the frame. It is currently NOT sent — the payload alone should
+  // carry the target state. Watch for the "MCU ACKed BLE report" INFO line to
+  // confirm the MCU accepts this format.
+  void report_beacon_to_mcu_(uint8_t beacon_ctr, const uint8_t *payload8) {
+    uint8_t f[22];
+    f[0]  = MAGIC_0; f[1] = MAGIC_1;
+    f[2]  = 0x00;    f[3] = 0x11;      // 17 payload bytes
+    f[4]  = 0x02;                       // action:2
+    f[5]  = 0x1F;    f[6] = 0x41;      // resource 0x1F41
+    f[7]  = (msg_counter_ >> 24) & 0xFF;
+    f[8]  = (msg_counter_ >> 16) & 0xFF;
+    f[9]  = (msg_counter_ >>  8) & 0xFF;
+    f[10] = (msg_counter_      ) & 0xFF;
+    msg_counter_++;
+    f[11] = 0x00;                       // reserved/pad
+    f[12] = 0x08;                       // data_length
+    for (int i = 0; i < 8; i++) f[13 + i] = payload8[i];
+    f[21] = checksum_(f, 21);
+    write_array(f, 22);
+    ESP_LOGI(TAG, "BLE→MCU report (0x1F41, beacon ctr=%u, msg ctr=%u) — EXPERIMENTAL",
+             (unsigned) beacon_ctr, (unsigned) (msg_counter_ - 1));
   }
 };
 
