@@ -28,6 +28,12 @@ constexpr uint8_t CMD_QUERY = 0x02;  // MCU→ESP WiFi status query
 // BLE remote beacon — manufacturer-specific advertisement, company ID 0x4D44 ("DM")
 constexpr uint16_t BLE_COMPANY_DM = 0x4D44;  // little-endian "DM" = DreamMaker
 
+// Beacon status byte [9]: idle heartbeat vs. actual button press.
+// Confirmed from captures — commands carry an 8-byte encrypted payload,
+// idle heartbeats carry all zeros.
+constexpr uint8_t BLE_STATUS_IDLE    = 0x01;
+constexpr uint8_t BLE_STATUS_COMMAND = 0x02;
+
 // Resource IDs for CMD_SET — confirmed from 31 TX captures
 constexpr uint8_t RES_POWER     = 0x00;
 constexpr uint8_t RES_SPEED     = 0x01;
@@ -735,7 +741,11 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
     memcpy(ble_last_payload_, payload, BLE_PAYLOAD_MAX);
 
     // Optional, experimental: forward the beacon to the MCU (resource 0x1F41).
-    if (ble_report_to_mcu_ && changed)
+    // Only status 0x02 = command/button press is forwarded. Idle heartbeats
+    // (status 0x01) also bump the counter, so `changed` alone would forward a
+    // stream of all-zero payloads — pointless and a needless risk given the
+    // MCU's "BLE->mcu report timeout!" → reset path.
+    if (ble_report_to_mcu_ && changed && status == BLE_STATUS_COMMAND)
       report_beacon_to_mcu_(counter, payload);
   }
 #endif
