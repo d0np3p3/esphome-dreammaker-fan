@@ -26,13 +26,26 @@ Alles Nötige ist bekannt. Ablauf pro Kommando-Beacon (`status=0x02`):
 - [ ] `ble_report_to_mcu` als Sackgasse markieren oder entfernen —
       rohes Weiterleiten funktioniert nicht (MCU ACKt, tut aber nichts)
 
-### Offene Design-Frage
+### Offene Design-Frage — woher bekommt der Nutzer den `ble_key`?
 
-Wie kommt der Nutzer an seinen `ble_key`? Er steht nur im NVS des **originalen**
-Fans — wer schon auf ESPHome geflasht hat, ohne vorher zu sichern, kommt nicht
-mehr dran. Optionen:
-- Anleitung zum NVS-Dump **vor** dem Flashen (`esptool read_flash 0x9000 0x4000`)
-- Alternativ Lerntabelle als Rückfallweg für genau diese Nutzer
+Aktuell nur aus dem NVS des **originalen** Fans. Wer schon geflasht hat, ohne zu
+sichern, kommt nicht mehr dran.
+
+**Vielversprechende Spur (unbestätigt):** Die ersten **8 Byte** der
+GATT-Bind-Nachricht (FF01) sind genau schlüsselgroß, und die Neu-Gruppierung
+`8|6|6` zeigt sie als einziges variables Feld (siehe PROTOCOL.md). Falls das der
+Schlüssel ist, könnte ESPHome ihn beim eigenen Bind selbst lernen — dann bräuchte
+niemand mehr einen NVS-Dump.
+
+- [ ] **Entscheidender Test:** Fan mit Original-FW koppeln, dabei FF01
+      mitschneiden, danach NVS dumpen und `ble_key` gegen die ersten 8 Byte
+      vergleichen
+- [ ] Falls Treffer: Bind in dm_fan.h implementieren, Schlüssel automatisch lernen
+- [ ] Bis dahin: Anleitung zum NVS-Dump **vor** dem Flashen
+
+**Ausgeschlossen:** Der Schlüssel kommt nicht aus der Cloud (Pairing-Mitschnitt
+zeigt keinen Austausch) und ist nicht aus MAC/product_id/device_id/device_key
+ableitbar (mehrere hundert Ableitungen getestet, kein Treffer).
 
 ---
 

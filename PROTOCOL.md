@@ -522,6 +522,50 @@ The bind handshake is a **plain challenge-echo**, no AES crypto:
 After step 3, the remote is bound and streams button events as further
 notifications on FF01 (and possibly FF02).
 
+### ⭐ Re-reading 2026-08-03 — the handshake is `8 | 6 | 6`, not `6 | 8 | 6`
+
+The grouping above was wrong. Regrouped, the constant part becomes contiguous
+and the tail is exactly a repeat of the head:
+
+```
+                  [0..7]  8 bytes          [8..13] 6 bytes    [14..19] 6 bytes
+step 1  29 B0 C3 6E 91 97 B4 71   |   00 01 03 01 00 03   |   29 B0 C3 6E 91 97
+step 3  0D 0A 40 15 DC 7C 45 43   |   00 01 03 01 00 03   |   0D 0A 40 15 DC 7C
+                variable                   CONSTANT              = bytes [0..5]
+```
+
+- middle 6 bytes are **identical** in both messages → fixed metadata
+- trailing 6 bytes are **exactly** `[0..5]` in both → integrity repeat
+- leading **8 bytes** are variable — and 8 bytes is exactly the `ble_key` size
+
+**Hypothesis: the first 8 bytes of the bind message ARE the DES key.** That
+would make the bind a plain key handout, matching the fact that the key is not
+derivable (below) and never touches the cloud.
+
+**Decisive experiment:** pair a fan running original firmware while capturing
+FF01, then dump NVS and compare `ble_key` against the leading 8 bytes. If they
+match, ESPHome can learn the key during its own bind and no NVS dump is ever
+needed — which removes the main obstacle for other users.
+
+> ⚠️ Unverified. The two captured messages are from a different pairing session
+> than the NVS dump we have, so they cannot be correlated directly.
+
+### Where the key does NOT come from
+
+Two negative results, both useful:
+
+**Not from the cloud.** A `dmiot2mqtt` capture taken *during* an active remote
+pairing shows only `resource_id:127` heartbeats and one `9031` state push — no
+pairing message, no key exchange. Pairing is **purely local** between remote and
+ESP module.
+
+**Not derivable from known identifiers.** Several hundred candidate derivations
+were tested offline against the known (`ble_mac`, `ble_key`) pair — direct byte
+slices, MD5/SHA1/SHA256/SHA512 (head and tail truncation), XOR combinations, and
+DES of each value keyed with the others, over remote MAC, fan MAC, `product_id`,
+`device_id`, `device_key` and `ble_model`. **No match.** The key is therefore
+generated at pairing time, not computed from device identity.
+
 **Phase 3 implementation** in `dm_fan.h`:
 - On connect: read FF01 → store 20-byte challenge.
 - On FF01 NOTIFY (first, 20-byte): write the same bytes back to FF02 (WRITE).
