@@ -24,13 +24,31 @@ Fully local, no cloud, no Tuya — works 100% offline via Home Assistant.
 | Boot state sync from MCU | ✅ |
 | Anti-flap lock (300 ms) | ✅ |
 | MCU version readout | ✅ |
-| **BLE remote (DM-FCB01)** | ✅ v4.0.0-beta — needs `ble_key`, see below |
+| **BLE remote (DM-FCB01)** | ✅ **v4.0.0-beta branch only** — see below |
 
 ---
 
-## BLE remote control (v4.0.0-beta)
+## Which config do I need?
 
-**Confirmed working on hardware (2026-08-03)** — all five button actions decode and drive the fan.
+| | Config | Branch |
+|---|---|---|
+| **Most users** — control from Home Assistant | [`dm_fan.yaml`](dm_fan.yaml) | `main` |
+| You still use the original remote (DM-FCB01) | [`remote_control.yaml`](remote_control.yaml) | `v4.0.0-beta` |
+
+The remote support lives on the **`v4.0.0-beta`** branch. It needs a per-device
+key that can only be extracted **before** flashing ESPHome, so it is not part of
+the stable `main` line — everything else works identically on both.
+
+---
+
+## BLE remote control (`v4.0.0-beta` branch)
+
+**Confirmed working on hardware (2026-08-03)** — all five button actions decode
+and drive the fan: power, the four speed gears, all three modes, oscillation and
+the full timer cycle.
+
+> Requires `ref: v4.0.0-beta` in `external_components` — the component on `main`
+> does not contain the BLE code.
 
 The original DM-FCB01 remote keeps working after flashing ESPHome. It broadcasts
 each button press as an encrypted BLE advertisement, which `dm_fan` decrypts and

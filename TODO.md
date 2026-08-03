@@ -6,121 +6,81 @@
 
 ---
 
-## 🟢 Prio 1: ✅ AUF HARDWARE BESTÄTIGT (2026-08-03)
+## ✅ Stand 2026-08-03 — hier vorerst fertig
 
-Die Fernbedienung steuert den Fan. Alle fünf Tasten getestet, keine einzige
-`checksum mismatch`-Zeile:
+Die Fernbedienung steuert den Fan. Was noch offen ist, steht unten und ist
+alles optional oder braucht Hardware-Gegenprüfung.
 
-| Taste | getestet |
-|-------|----------|
-| Power | ✅ an/aus |
-| Speed | ✅ voller Zyklus 35→70→100→1→35 |
-| Mode | ✅ direct→natural→smart |
-| Oszillation | ✅ an/aus mehrfach |
-| Timer | ✅ 0→60→120→180→240 min |
+### Erreicht
 
-Scan-Fenster `200ms/100ms` reicht — jeder Tastendruck kam an.
+| | |
+|---|---|
+| Beacon-Payload entschlüsselt | **DES-ECB** mit `ble_key` aus dem NVS |
+| Payload-Struktur | Taste + kompletter Zielzustand + Prüfsumme, 18/18 konsistent |
+| Auf Hardware bestätigt | alle 5 Tasten, keine `checksum mismatch` |
+| DES-Implementierung | selbstgeschrieben, gegen FIPS-Vektor + Captures geprüft |
+| `0x1F44`-ACK-Bug | gefixt (`data_len=1, data=[01]`) |
+| `0x1F41`-Frameformat | hardware-bestätigt (MCU ACKt) — aber wirkungslos |
+| Smart-Modus | Speed ist MCU-eigen, wird nicht mehr überschrieben |
 
-### ✅ Behoben: Speed im Smart-Modus (2026-08-03)
+### Branch-Aufteilung
 
-Im Smart-Modus regelt der Fan die Drehzahl **selbst** aus Temperatur und
-Luftfeuchtigkeit. Die MCU meldete `spd=50%`, HA zeigte aber dauerhaft `100`.
+- **`main`** — Standardbetrieb ohne Fernbedienung (`dm_fan.yaml`)
+- **`v4.0.0-beta`** — alles mit Fernbedienung (`remote_control.yaml`)
 
-Zwei Fehler, beide behoben:
+Grund: der `ble_key` lässt sich nur **vor** dem Flashen auslesen. Damit ist das
+Feature nichts für die stabile Linie, solange es keinen anderen Weg zum
+Schlüssel gibt.
 
-1. **HA-Anzeige korrigierte sich nie.** Die MCU-Frames nach einem Tastendruck
-   tragen `echo != 0`, landen also im Echo-Zweig, der ohne Publish zurückkehrt —
-   und dabei die Änderungserkennung (`hw_state_`) auf den MCU-Wert setzt. Damit
-   war der falsche Wert dauerhaft eingefroren, kein späterer Frame konnte ihn
-   noch korrigieren. Jetzt wird im Smart-Modus die von der MCU gemeldete
-   Drehzahl übernommen.
-2. **Wir hätten die Regelung überschrieben.** Die Fernbedienung schickt in jedem
-   Payload ihre zuletzt manuell gewählte Stufe mit. Im Smart-Modus wird `speed`
-   jetzt nicht mehr an die MCU gesendet.
+---
 
-- [ ] Auf Hardware gegenprüfen: Smart-Modus einstellen, dann zeigt HA die
-      tatsächlich geregelte Drehzahl und folgt ihr, wenn sich Temperatur oder
-      Luftfeuchtigkeit ändern
+## 🟡 Offen: Hardware-Gegenprüfung
 
-### ✅ Erledigt (2026-08-03)
+- [ ] Smart-Modus: zeigt HA jetzt die tatsächlich geregelte Drehzahl und folgt
+      ihr, wenn Temperatur/Luftfeuchtigkeit sich ändern?
+      Debug-Log: `Smart mode: MCU regulated speed to X% (we showed Y%)`
+- [ ] Prüfen ob `byte[5]` (immer 0) doch etwas kodiert — die Fernbedienung hat
+      keine Winkel-Taste, vermutlich echt ungenutzt
 
-- [x] Config-Option `ble_key` (8 Byte Hex, akzeptiert Leerzeichen/Doppelpunkte)
-- [x] DES **selbst implementiert** (`components/dm_fan/des.h`) statt mbedTLS —
-      `MBEDTLS_DES_C` ist in ESP-IDF standardmäßig AUS, eine sdkconfig-
-      Abhängigkeit wäre eine Fehlerquelle für jeden Nutzer
-      - verifiziert gegen FIPS-46-3-Vektor, Roundtrip und alle Capture-Payloads
-        (byte-identisch zu pycryptodome)
-- [x] Payload dekodieren + Prüfsumme validieren
-- [x] Ungültige Prüfsumme → verwerfen (Schutz vor fremden Fernbedienungen)
-- [x] Zusätzlich Wertebereiche prüfen, bevor etwas auf den UART geht
-- [x] Nur Deltas senden — sonst 5 UART-Frames pro Tastendruck statt 1
-- [x] `ble_report_to_mcu` als bestätigte Sackgasse markiert
+---
 
-### Offene Design-Frage — woher bekommt der Nutzer den `ble_key`?
+## 🔵 Offen: der Schlüssel für andere Nutzer
 
-Aktuell nur aus dem NVS des **originalen** Fans. Wer schon geflasht hat, ohne zu
-sichern, kommt nicht mehr dran.
+Das ist die einzige echte Hürde für eine breitere Nutzung.
 
 **Vielversprechende Spur (unbestätigt):** Die ersten **8 Byte** der
 GATT-Bind-Nachricht (FF01) sind genau schlüsselgroß, und die Neu-Gruppierung
-`8|6|6` zeigt sie als einziges variables Feld (siehe PROTOCOL.md). Falls das der
-Schlüssel ist, könnte ESPHome ihn beim eigenen Bind selbst lernen — dann bräuchte
-niemand mehr einen NVS-Dump.
+`8|6|6` zeigt sie als einziges variables Feld (siehe PROTOCOL.md). Wäre das der
+Schlüssel, könnte ESPHome ihn beim eigenen Bind lernen — kein NVS-Dump mehr nötig.
 
 - [ ] **Entscheidender Test:** Fan mit Original-FW koppeln, dabei FF01
       mitschneiden, danach NVS dumpen und `ble_key` gegen die ersten 8 Byte
       vergleichen
-- [ ] Falls Treffer: Bind in dm_fan.h implementieren, Schlüssel automatisch lernen
-- [ ] Bis dahin: Anleitung zum NVS-Dump **vor** dem Flashen
+- [ ] Falls Treffer: Bind in dm_fan.h implementieren → Feature wäre reif für `main`
 
-**Ausgeschlossen:** Der Schlüssel kommt nicht aus der Cloud (Pairing-Mitschnitt
-zeigt keinen Austausch) und ist nicht aus MAC/product_id/device_id/device_key
-ableitbar (mehrere hundert Ableitungen getestet, kein Treffer).
-
----
-
-## 🟡 Prio 2: `ble_key` sichern (falls noch nicht geschehen)
-
-- [ ] NVS des gepairten Fans sichern, solange Original-FW noch drauf ist
-      `esptool.py --port COMx read_flash 0x9000 0x4000 nvs_backup.bin`
-- [ ] `ble_key` extrahieren (8-Byte-Blob; **Achtung:** bei `type=0x41`, `span=2`
-      stehen die Daten am Anfang des FOLGENDEN 32-Byte-Blocks, nicht im
-      Metadaten-Eintrag; NVS ist wear-levelled → Kopie mit echter CRC nehmen)
-- [ ] Fernbedienung **nicht** neu koppeln (Power+M) — neuer Bond = neuer Key
+**Ausgeschlossen:** nicht aus der Cloud (Pairing-Mitschnitt zeigt keinen
+Austausch), nicht ableitbar aus MAC/product_id/device_id/device_key
+(mehrere hundert Ableitungen getestet).
 
 ---
 
-## 🟢 Prio 3: Aufräumen / Verifikation
+## 📝 Offen: Doku / Community
 
-- [ ] Nach dem Einbau: alle 5 Tasten durchtesten, ob der Fan korrekt folgt
-- [ ] Prüfen ob `byte[5]` (immer 0) doch etwas kodiert — z. B. Winkel?
-      Im Capture wurde der Winkel nie über die Fernbedienung verstellt, und die
-      Fernbedienung hat auch keine Winkel-Taste — vermutlich echt ungenutzt.
-- [ ] `ble_capture.yaml` / `ble_discovery.yaml` archivieren — der GATT-Weg ist
-      nicht mehr nötig (Challenge-Echo gehört zum Bind, nicht zum Kommandoweg)
-- [ ] Tag `v4.0.0` (stable)
-
----
-
-## ⚪ Prio 4: Nicht mehr nötig / eingestellt
-
-- ~~Lerntabelle aufbauen~~ — durch DES-Entschlüsselung überflüssig
-- ~~Rohes Beacon-Forwarding an die MCU~~ — Format bestätigt (MCU ACKt), aber
-  wirkungslos: das ESP-Modul war die entschlüsselnde Seite, nicht die MCU
-- **Remote SWD**: ST-Link meldet `chipid: 0x000` → Debug-Port vermutlich
-  gesperrt. Nicht mehr nötig.
-- **Remote UART**: nur Rauschen, kein validiertes Frame. Nicht mehr nötig.
-
----
-
-## 📝 Prio 5: Doku / Community
-
-- [ ] **Korrektur in `dhewg/esphome-miot#50` posten**: unser alter Kommentar vom
-      19. Mai behauptet `action:81 / resource:0x70` für die WiFi-Query-Antwort.
-      Korrekt ist `action:82 / resource:0x78` (echot die Query-Resource).
-- [ ] README: BLE-Fernbedienung als Feature dokumentieren, inkl. der
-      Einschränkung, dass der `ble_key` vorher gesichert werden muss
+- [ ] **Korrektur in `dhewg/esphome-miot#50` posten** — Text liegt fertig in
+      [`docs/esphome-miot-issue50-correction.md`](docs/esphome-miot-issue50-correction.md)
 - [ ] Flash-Backup Hälfte 2 (`0x200000`–`0x400000`) nachziehen
+- [ ] Wenn Smart-Modus gegengeprüft: Tag `v4.0.0`
+
+---
+
+## ⚪ Eingestellt
+
+- ~~Lerntabelle~~ — durch DES-Entschlüsselung überflüssig
+- ~~Rohes Beacon-Forwarding an die MCU (`0x1F41`)~~ — Format bestätigt, aber
+  wirkungslos: das ESP-Modul war die entschlüsselnde Seite, nicht die MCU
+- ~~Remote SWD~~ — `chipid: 0x000`, Debug-Port vermutlich gesperrt
+- ~~Remote UART~~ — nur Rauschen, kein validiertes Frame
+- ~~GATT als Kommandoweg~~ — Challenge-Echo gehört zum Bind, nicht zu den Tasten
 
 ---
 
@@ -128,4 +88,4 @@ ableitbar (mehrere hundert Ableitungen getestet, kein Treffer).
 
 `ble_key`, `device_key`, `device_id` und WiFi-Zugangsdaten sind **pro Gerät
 geheim** und stehen **nicht** in diesem öffentlichen Repo — nur Struktur und
-Fundort. Der `ble_key` gehört in `secrets.yaml`, nicht in die Gerätekonfiguration.
+Fundort. Der `ble_key` gehört in `secrets.yaml`.

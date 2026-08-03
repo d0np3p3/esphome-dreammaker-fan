@@ -1,5 +1,13 @@
-# DM Fan ESPHome Configuration
-# v4.0.0-beta — MCU version readout via boot response parsing
+# DM Fan ESPHome Configuration — STANDARD (ohne BLE-Fernbedienung)
+# ──────────────────────────────────────────────────────────────────────────────
+# Das ist die Konfiguration für den Normalfall: Steuerung über Home Assistant,
+# Sensoren, alles über UART. Keine BLE-Fernbedienung.
+#
+# 📡 Du hast die Original-Fernbedienung (DM-FCB01) und willst sie weiter nutzen?
+#    → dann `remote_control.yaml` verwenden (Branch v4.0.0-beta).
+#      Voraussetzung: der `ble_key` aus dem NVS des Fans, ausgelesen BEVOR
+#      ESPHome geflasht wurde. Details im README.
+# ──────────────────────────────────────────────────────────────────────────────
 
 substitutions:
   device_name: dreammaker-fan
@@ -45,15 +53,17 @@ wifi:
 
 captive_portal:
 
-bluetooth_proxy:
-  active: false  # true = BLE connections (e.g. Xiaomi thermometers), false = scan only
+# BLE wird hier nicht gebraucht. Wer den ESP32 zusätzlich als
+# Bluetooth-Proxy für HA nutzen will, kann das einkommentieren:
+# bluetooth_proxy:
+#   active: false
 
 # ── External component ────────────────────────────────────────────────────────
 external_components:
   - source:
       type: git
       url: https://github.com/d0np3p3/esphome-dreammaker-fan
-      ref: v4.0.0-beta
+      ref: main
     refresh: 0s  # always pull the latest branch state — no "Clean Build Files" needed
     components: [dm_fan]
   # Local (for testing):
@@ -76,14 +86,7 @@ fan:
     name: "DM Fan"
     uart_id: uart_bus
     # log_raw_frames: true   # uncomment to dump every MCU frame as hex at DEBUG level
-    # ── BLE remote (Phase 1: receive + decode + log) ───────────────────────────
-    # Needs a BLE tracker in the config — bluetooth_proxy below provides one.
-    # Press remote buttons and watch the log for "DM remote beacon ... payload=[...]"
-    # to map which payload bytes change per button.
-    ble_remote: true
-    # ble_report_to_mcu: true  # EXPERIMENTAL — forwards beacon to MCU (res 0x1F41).
-                               # Leave OFF until the frame format is confirmed; a
-                               # malformed report can make the MCU reset the ESP.
+    # ble_remote / ble_key → siehe remote_control.yaml (Branch v4.0.0-beta)
     mcu_version:
       name: "MCU Version"
       entity_category: diagnostic
