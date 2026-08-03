@@ -191,13 +191,13 @@ components/
     fan.py                     ← Python codegen (fan platform)
     dm_fan.h                   ← C++ component (all logic)
     des.h                      ← single-DES for the remote payload
-
-Research / debugging configs (not needed for normal use):
-  ble_remote_test.yaml         ← log raw remote payloads
-  ble_mcu_forward_test.yaml    ← 0x1F41 forward experiment (dead end, kept for reference)
-  ble_capture.yaml             ← GATT connect + bind handshake capture
-  ble_discovery.yaml           ← GATT service/characteristic discovery
+docs/
+  esphome-miot-issue50-correction.md   ← correction note for the upstream thread
 ```
+
+The research configs used while reverse engineering (raw payload logging, GATT
+discovery, the 0x1F41 forward experiment) were removed once the protocol was
+solved. They remain in the git history if anyone needs them.
 
 ---
 

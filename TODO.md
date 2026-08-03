@@ -56,6 +56,9 @@ Schlüssel, könnte ESPHome ihn beim eigenen Bind lernen — kein NVS-Dump mehr 
 - [ ] **Entscheidender Test:** Fan mit Original-FW koppeln, dabei FF01
       mitschneiden, danach NVS dumpen und `ble_key` gegen die ersten 8 Byte
       vergleichen
+      > Die dafür nötige GATT-Capture-Config wurde mit den übrigen
+      > Forschungs-YAMLs entfernt — bei Bedarf aus der Git-Historie holen:
+      > `git show 29538a7:ble_capture.yaml > ble_capture.yaml`
 - [ ] Falls Treffer: Bind in dm_fan.h implementieren → Feature wäre reif für `main`
 
 **Ausgeschlossen:** nicht aus der Cloud (Pairing-Mitschnitt zeigt keinen

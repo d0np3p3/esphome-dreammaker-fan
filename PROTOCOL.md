@@ -193,7 +193,7 @@ the previous peer and puts the device into the waiting state in one step.
 > accepted) but the remote may still consider the **original Tuya module** its
 > bound peer, so no notifications reach the ESP32. Because reset = pairing, simply
 > pressing **Power + M** on the remote clears the old bind and opens a fresh
-> pairing window — connect the ESP32 (ble_capture.yaml) during that window so the
+> pairing window — connect the ESP32 via GATT during that window so the
 > remote binds to *us*. This is the leading hypothesis for why the echo succeeds
 > but no button notifications follow — test it before assuming SMP is the blocker.
 
@@ -454,7 +454,7 @@ the ESP-IDF stack. So no manual decryption is needed. Two paths:
 - **Path B: import the original LTK** — impossible: all NVS dumps were taken
   **unpaired** (`ble_model=0`, `ble_key` zeroed), so no LTK exists to import.
 
-### GATT table — confirmed (2026-06-10, `ble_discovery.yaml`)
+### GATT table — confirmed (2026-06-10)
 
 Full GATT enumeration of remote `4B:F2:7E:47:E5:6E`:
 
@@ -571,7 +571,8 @@ generated at pairing time, not computed from device identity.
 - On FF01 NOTIFY (first, 20-byte): write the same bytes back to FF02 (WRITE).
 - On subsequent FF01/FF02 NOTIFY: decode payload → fan action.
 
-**Per-button capture table** (fill in during the current ble_capture session).
+**Per-button capture table** — superseded by the DES decryption above; the
+button is byte [0] of the decrypted payload, no capture table needed.
 The remote (DM-FCB01) has only 4 buttons; M has a short/long press → 5 actions:
 
 | Action | Button + press | FF01 payload (hex) | FF02 payload (hex) |
