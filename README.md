@@ -24,11 +24,13 @@ Fully local, no cloud, no Tuya — works 100% offline via Home Assistant.
 | Boot state sync from MCU | ✅ |
 | Anti-flap lock (300 ms) | ✅ |
 | MCU version readout | ✅ |
-| **BLE remote (DM-FCB01)** | 🧪 v4.0.0-beta — needs `ble_key`, see below |
+| **BLE remote (DM-FCB01)** | ✅ v4.0.0-beta — needs `ble_key`, see below |
 
 ---
 
 ## BLE remote control (v4.0.0-beta)
+
+**Confirmed working on hardware (2026-08-03)** — all five button actions decode and drive the fan.
 
 The original DM-FCB01 remote keeps working after flashing ESPHome. It broadcasts
 each button press as an encrypted BLE advertisement, which `dm_fan` decrypts and

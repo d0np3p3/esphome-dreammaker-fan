@@ -6,17 +6,34 @@
 
 ---
 
-## 🔴 Prio 1: Auf Hardware testen ⬅️ NÄCHSTER SCHRITT
+## 🟢 Prio 1: ✅ AUF HARDWARE BESTÄTIGT (2026-08-03)
 
-Der Code ist fertig (`623936b`), aber **noch nie auf dem Gerät gelaufen**.
+Die Fernbedienung steuert den Fan. Alle fünf Tasten getestet, keine einzige
+`checksum mismatch`-Zeile:
 
-- [ ] `remote_control.yaml` mit eigenem `ble_key` in `secrets.yaml` bauen
-- [ ] **Compile-Test** — die Schemaanbindung (`std::array` per Codegen) konnte
-      hier nicht geprüft werden, ESPHome ließ sich nicht installieren
-- [ ] Alle 5 Tasten durchtesten: Power, Speed (4 Stufen), Mode (3), Oszillation,
-      Timer (5 Stufen)
-- [ ] Log prüfen: `Remote [Power]: power=1 speed=70 mode=0 osc=1 timer=0min`
-- [ ] Bei `checksum mismatch` → falscher `ble_key`
+| Taste | getestet |
+|-------|----------|
+| Power | ✅ an/aus |
+| Speed | ✅ voller Zyklus 35→70→100→1→35 |
+| Mode | ✅ direct→natural→smart |
+| Oszillation | ✅ an/aus mehrfach |
+| Timer | ✅ 0→60→120→180→240 min |
+
+Scan-Fenster `200ms/100ms` reicht — jeder Tastendruck kam an.
+
+### 🔍 Beobachtung zum Nachprüfen: Speed-Anzeige im Smart-Modus
+
+Im Smart-Modus meldet die MCU eine selbst geregelte Drehzahl (`spd=50%`),
+während die Fernbedienung ihren Zielwert schickt (`speed=100`). HA zeigt 100.
+
+Ursache: der Anti-Flap-Guard (`STALE_GUARD_MS = 250`) verwirft MCU-Frames, die
+kurz nach einem eigenen Kommando kommen — hier ist das aber keine Echo-Dopplung,
+sondern echte Information. Im Testlog folgte jeder MCU-Frame binnen ~40-90 ms auf
+einen Tastendruck, deshalb war nie ein ungesperrter Frame zu sehen.
+
+- [ ] Prüfen: gleicht sich die Anzeige nach ein paar Sekunden Ruhe von selbst an?
+- [ ] Falls nein: Guard so verfeinern, dass er nur echte Echos verwirft
+      (z. B. Vergleich gegen den zuletzt gesendeten Wert statt reiner Zeitfenster)
 
 ### ✅ Erledigt (2026-08-03)
 
