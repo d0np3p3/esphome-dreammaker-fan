@@ -23,7 +23,42 @@ Fully local, no cloud, no Tuya — works 100% offline via Home Assistant.
 | WiFi keepalive — 3-stage (prevents MCU reboot) | ✅ |
 | Boot state sync from MCU | ✅ |
 | Anti-flap lock (300 ms) | ✅ |
-| BLE remote | 🔜 planned |
+| BLE remote (DM-FCB01) | ✅ on the **`v4.0.0-beta`** branch — see below |
+
+---
+
+## BLE remote control → `v4.0.0-beta` branch
+
+The original DM-FCB01 remote can keep working after flashing ESPHome. It
+broadcasts each button press as a BLE advertisement whose 8-byte payload is
+encrypted with single DES; the component decrypts it and drives the fan —
+fully local, no cloud, no re-pairing. Confirmed working on hardware.
+
+**This is not part of `main`.** It needs a per-device key (`ble_key`) that can
+only be extracted from the fan's NVS **before** ESPHome is flashed, which makes
+it unsuitable as a default. If you have the original remote and still run the
+stock firmware, dump your NVS first:
+
+```bash
+esptool.py --port COMx read_flash 0x9000 0x4000 nvs_backup.bin
+```
+
+Then use the beta branch:
+
+```yaml
+external_components:
+  - source:
+      type: git
+      url: https://github.com/d0np3p3/esphome-dreammaker-fan
+      ref: v4.0.0-beta
+    components: [dm_fan]
+```
+
+→ **[Branch `v4.0.0-beta`](https://github.com/d0np3p3/esphome-dreammaker-fan/tree/v4.0.0-beta)**
+· config: `remote_control.yaml`
+· [protocol details](https://github.com/d0np3p3/esphome-dreammaker-fan/blob/v4.0.0-beta/PROTOCOL.md)
+
+Everything else is identical on both branches.
 
 ---
 
