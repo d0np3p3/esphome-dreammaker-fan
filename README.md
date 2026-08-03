@@ -23,7 +23,70 @@ Fully local, no cloud, no Tuya — works 100% offline via Home Assistant.
 | WiFi keepalive — 3-stage (prevents MCU reboot) | ✅ |
 | Boot state sync from MCU | ✅ |
 | Anti-flap lock (300 ms) | ✅ |
-| BLE remote | 🔜 planned |
+| MCU version readout | ✅ |
+| **BLE remote (DM-FCB01)** | 🧪 v4.0.0-beta — needs `ble_key`, see below |
+
+---
+
+## BLE remote control (v4.0.0-beta)
+
+The original DM-FCB01 remote keeps working after flashing ESPHome. It broadcasts
+each button press as an encrypted BLE advertisement, which `dm_fan` decrypts and
+turns into fan commands — fully local, no cloud, no re-pairing.
+
+**Requires the fan's `ble_key`** — an 8-byte per-device secret stored in the
+fan's NVS. Without it the presses are logged but cannot be executed.
+
+```yaml
+fan:
+  - platform: dm_fan
+    id: my_fan
+    uart_id: uart_bus
+    ble_remote: true
+    ble_key: !secret dm_ble_key    # 8 bytes hex, e.g. "00 11 22 33 44 55 66 77"
+
+esp32_ble_tracker:                 # required by ble_remote
+  scan_parameters:
+    active: false
+    interval: 200ms
+    window: 100ms
+```
+
+See [`remote_control.yaml`](remote_control.yaml) for a complete config.
+
+### Getting the `ble_key` — do this BEFORE flashing
+
+The key only exists in the NVS of a fan still running the **original firmware**.
+Once ESPHome is flashed it may be gone, so dump it first:
+
+```bash
+esptool.py --port COMx read_flash 0x9000 0x4000 nvs_backup.bin
+```
+
+Then locate the `ble_key` entry. Two pitfalls:
+
+- For `type=0x41` (blob) with `span=2` the 8 payload bytes are **not** in the
+  metadata entry — they sit at the start of the **following** 32-byte block.
+- NVS is wear-levelled, so several copies exist. Use the one with a real CRC,
+  not `ffffffff`.
+
+Sanity check: `ble_model` must be `0x0201` (513) and `ble_mac` must match your
+remote's MAC. If `ble_model` is `0`, that fan was never paired.
+
+> ⚠️ **Do not re-pair the remote** (Power + M). A new bond generates a new key
+> and your saved `ble_key` becomes useless.
+
+### How it works
+
+The remote broadcasts a manufacturer-specific advertisement (company ID
+`0x4D44` = "DM"). A button press carries an 8-byte payload encrypted with
+**single DES in ECB mode**, keyed with `ble_key`. Decrypted it holds the pressed
+button plus the complete target state and a checksum. Frames failing the
+checksum are rejected, so a wrong key or a neighbour's remote can never drive
+your fan.
+
+Full protocol details, including the decrypted byte layout and the evidence
+behind it, are in [PROTOCOL.md](PROTOCOL.md).
 
 ---
 
@@ -98,13 +161,22 @@ After flashing, the ESP32 talks to the fan MCU over an **internal UART already w
 ## File structure
 
 ```
-dm_fan.yaml                    ← ESPHome configuration
-PROTOCOL.md                    ← ESP32 ↔ MCU communication reference
+dm_fan.yaml                    ← ESPHome configuration (UART only)
+remote_control.yaml            ← configuration WITH BLE remote (v4.0.0-beta)
+PROTOCOL.md                    ← ESP32 ↔ MCU + BLE remote protocol reference
+TODO.md                        ← open work, ordered by priority
 components/
   dm_fan/
     __init__.py                ← Namespace declaration
     fan.py                     ← Python codegen (fan platform)
     dm_fan.h                   ← C++ component (all logic)
+    des.h                      ← single-DES for the remote payload
+
+Research / debugging configs (not needed for normal use):
+  ble_remote_test.yaml         ← log raw remote payloads
+  ble_mcu_forward_test.yaml    ← 0x1F41 forward experiment (dead end, kept for reference)
+  ble_capture.yaml             ← GATT connect + bind handshake capture
+  ble_discovery.yaml           ← GATT service/characteristic discovery
 ```
 
 ---
