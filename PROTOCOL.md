@@ -319,12 +319,45 @@ MCU→ESP (action:82): FA CE 00 0A 82 1F 41 ... 01 [chk]   (ACK, value 0x01)
 > confirmed rule that `f[12]` counts the bytes after it (holds for the
 > `send_cmd_byte_` frame: `data_len=3`, and for the `0x1F44` pair: `data_len=1`).
 
-> ⚠️ Still **not confirmed on hardware**. `BLE->mcu report timeout!` after 2
-> failures triggers `SW_CPU_RESET` (0x238D). Gated behind
-> `ble_report_to_mcu: true`, **off by default**.
-> **Open question:** whether the MCU also wants the beacon's own counter byte
-> somewhere in the frame — currently not sent.
-> **Success marker:** the INFO line `MCU ACKed BLE report (action:82 res:0x1F41)`.
+### ✅ Frame format CONFIRMED on hardware (2026-08-01)
+
+```
+[I] DM remote beacon 4B:F2:7E:47:E5:6E proto=0x0201 ctr=137 status=0x02
+    payload[8]=[ 8B E0 00 F1 62 32 D5 66 ]
+[I] BLE→MCU report (0x1F41, beacon ctr=137, msg ctr=13) — EXPERIMENTAL
+[I] MCU ACKed BLE report (action:82 res:0x1F41, len=10)
+```
+
+The MCU parses the corrected frame and answers `action:82 res:0x1F41 len=10` —
+exactly the length seen in the original firmware. No reset, no timeout. The
+envelope (4-byte msg counter + pad + `data_len=8`) is therefore **correct**, and
+the beacon's own counter is **not** required in the frame.
+
+### ❗ But the fan does not react — the ESP is the decrypting side
+
+Despite the valid ACK the fan performs no action. The decisive clue is *where
+the key lives*: `ble_key` / `ble_mac` / `ble_model` sit in the **ESP module's
+NVS**, not the MCU's. So in the original architecture the **ESP decrypts** the
+beacon and forwards a *decoded* command; the MCU never sees ciphertext.
+
+That matches the observation exactly: our frame is structurally valid (→ ACK),
+but the 8 forwarded bytes are meaningless to the MCU (→ no action).
+
+**Consequences:**
+- Forwarding the raw payload cannot work, however correct the envelope is.
+- Either the payload is **decrypted** before forwarding, or the learn-table
+  route is used and we set the state ourselves via the normal `0x2347` commands
+  (which already work reliably).
+- The learn table stays viable and needs no crypto at all.
+- Decryption is testable offline: the 8-byte `ble_key` from the paired NVS dump
+  against captured 8-byte payloads. An 8-byte key with an 8-byte block points at
+  a 64-bit block cipher (DES / TEA family) or a vendor scheme. Plausible
+  plaintext is easy to recognise — a decoded state should carry power 0/1,
+  speed 1–100, mode 0–2, angle ∈ {30,60,90,120,140}.
+
+> ⚠️ `BLE->mcu report timeout!` after 2 failures triggers `SW_CPU_RESET`
+> (0x238D). Still gated behind `ble_report_to_mcu: true`, **off by default** —
+> the ACK proves the format, not that forwarding is useful.
 
 ### Full resource-ID map (from flash-firmware analysis)
 

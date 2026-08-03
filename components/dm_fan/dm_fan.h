@@ -511,9 +511,27 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
   void on_boot_response_() {
     uint16_t res = ((uint16_t)parse_buf_[1] << 8) | parse_buf_[2];
     if (res == 0x1F41) {
-      // ACK for our experimental BLE→MCU beacon report. Seeing this confirms
-      // the reverse-engineered 0x1F41 frame format is accepted by the MCU.
-      ESP_LOGI(TAG, "MCU ACKed BLE report (action:82 res:0x1F41, len=%u)", parse_len_);
+      // ACK for our BLE→MCU beacon report. CONFIRMED on hardware 2026-08-01:
+      // the MCU parses the frame and answers action:82 res:0x1F41 len=10.
+      //
+      // The ACK body is dumped in full because it is the only channel that can
+      // tell us WHY the fan does not react despite a valid ACK — e.g. a status
+      // byte meaning "payload rejected" vs "accepted". Layout follows the usual
+      // envelope: [cmd, res_hi, res_lo, msg_id 4B, pad, data_len, data...].
+      char hex[3 * 24 + 1];
+      char *p = hex;
+      const uint16_t n = parse_len_ < 24 ? parse_len_ : 24;
+      for (uint16_t i = 0; i < n; i++) p += snprintf(p, 4, "%02X ", parse_buf_[i]);
+      if (p > hex) *(p - 1) = '\0'; else hex[0] = '\0';
+      ESP_LOGI(TAG, "MCU ACKed BLE report (action:82 res:0x1F41, len=%u): %s",
+               parse_len_, hex);
+      if (parse_len_ >= 10) {
+        const uint8_t data_len = parse_buf_[8];
+        ESP_LOGI(TAG, "  → ACK data_len=%u data[0]=0x%02X %s",
+                 (unsigned) data_len, parse_buf_[9],
+                 parse_buf_[9] == 0x01 ? "(0x01 — accepted?)"
+                                       : "(NOT 0x01 — rejected?)");
+      }
       return;
     }
     if (res != 0x232A) {
