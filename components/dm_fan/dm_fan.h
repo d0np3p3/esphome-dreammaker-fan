@@ -9,7 +9,9 @@
 #ifdef USE_ESP32_BLE_DEVICE
 #include "esphome/components/esp32_ble_tracker/esp32_ble_tracker.h"
 #endif
+#include "des.h"
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <string>
 
@@ -176,6 +178,14 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
   void set_log_raw_frames(bool v)                          { log_raw_frames_ = v; }
   void set_ble_remote(bool v)                              { ble_remote_ = v; }
   void set_ble_report_to_mcu(bool v)                       { ble_report_to_mcu_ = v; }
+  // 8-byte DES key from the fan's NVS (`ble_key`). Per-device secret — without
+  // it the encrypted remote payload cannot be decoded. Takes std::array so the
+  // code generator can pass a brace-initialised list (same pattern as the API
+  // component's noise PSK).
+  void set_ble_key(std::array<uint8_t, 8> key) {
+    des_.set_key(key.data());
+    ble_key_set_ = true;
+  }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   void setup() override {
@@ -357,6 +367,8 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
   static constexpr size_t BLE_PAYLOAD_MAX = 16;
   bool    ble_remote_{false};
   bool    ble_report_to_mcu_{false};
+  des::Des des_;
+  bool    ble_key_set_{false};
   bool    ble_have_last_{false};
   uint8_t ble_last_counter_{0};
   uint8_t ble_last_status_{0};
@@ -758,15 +770,113 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
     ble_last_payload_len_ = pn;
     memcpy(ble_last_payload_, payload, BLE_PAYLOAD_MAX);
 
-    // Optional, experimental: forward the beacon to the MCU (resource 0x1F41).
-    // Only status 0x02 = command/button press is forwarded. Idle heartbeats
-    // (status 0x01) also bump the counter, so `changed` alone would forward a
-    // stream of all-zero payloads — pointless and a needless risk given the
-    // MCU's "BLE->mcu report timeout!" → reset path.
+    // Decrypt and act on the button press. This is the real remote path.
+    if (changed && status == BLE_STATUS_COMMAND && pn >= 8)
+      handle_remote_command_(payload);
+
+    // Legacy/experimental: forward the raw beacon to the MCU (resource 0x1F41).
+    // CONFIRMED DEAD END — the MCU ACKs the frame but does nothing, because the
+    // ESP module (not the MCU) was the decrypting side. Kept only for protocol
+    // experiments; the decryption path above is what actually works.
     if (ble_report_to_mcu_ && changed && status == BLE_STATUS_COMMAND)
       report_beacon_to_mcu_(counter, payload);
   }
 #endif
+
+  // ── Remote button press → decrypt → apply ─────────────────────────────────
+  //
+  // The 8-byte advertisement payload is single DES in ECB mode, keyed with the
+  // `ble_key` from the fan's NVS. Decrypted layout (confirmed against 18
+  // captured payloads, checksum valid on all of them):
+  //
+  //   [0] button  0xF1 Timer · 0xF2 Oscillation · 0xF3 Speed
+  //               0xF4 Power · 0xF5 Mode
+  //   [1] power        0/1
+  //   [2] speed        0x01=1 · 0x23=35 · 0x46=70 · 0x64=100
+  //   [3] mode         0 direct · 1 natural · 2 smart
+  //   [4] oscillation  0/1
+  //   [5] reserved     always 0x00
+  //   [6] timer        minutes: 0x00/3C/78/B4/F0 = 0/60/120/180/240
+  //   [7] checksum     sum(byte[0..6]) & 0xFF
+  //
+  // Bytes [1..6] carry the COMPLETE target state, not just the changed field,
+  // so we diff against `desired_` and only send what actually differs.
+  void handle_remote_command_(const uint8_t *payload8) {
+    if (!ble_key_set_) {
+      ESP_LOGW(TAG, "Remote button press received but no ble_key configured — "
+                    "cannot decrypt. Set `ble_key` to enable remote control.");
+      return;
+    }
+
+    uint8_t p[8];
+    des_.decrypt_block(payload8, p);
+
+    uint8_t sum = 0;
+    for (int i = 0; i < 7; i++) sum += p[i];
+    if (sum != p[7]) {
+      // Wrong key, or a beacon from someone else's remote. Either way the
+      // plaintext is meaningless — never act on it.
+      ESP_LOGW(TAG, "Remote payload checksum mismatch (got 0x%02X want 0x%02X) — "
+                    "wrong ble_key or foreign remote; ignoring", p[7], sum);
+      return;
+    }
+
+    const char *btn;
+    switch (p[0]) {
+      case 0xF1: btn = "Timer";       break;
+      case 0xF2: btn = "Oscillation"; break;
+      case 0xF3: btn = "Speed";       break;
+      case 0xF4: btn = "Power";       break;
+      case 0xF5: btn = "Mode";        break;
+      default:   btn = "unknown";     break;
+    }
+
+    const bool     power = p[1] != 0;
+    const uint8_t  speed = p[2];
+    const uint8_t  mode  = p[3];
+    const bool     osc   = p[4] != 0;
+    const uint16_t timer = (uint16_t) p[6];
+
+    ESP_LOGI(TAG, "Remote [%s]: power=%d speed=%u mode=%u osc=%d timer=%umin",
+             btn, power, (unsigned) speed, (unsigned) mode, osc,
+             (unsigned) timer);
+
+    // Guard the values before they reach the MCU: a corrupted-but-checksum-
+    // valid frame should not push nonsense onto the UART.
+    if (speed < 1 || speed > 100) {
+      ESP_LOGW(TAG, "Remote speed %u out of range — ignoring frame", (unsigned) speed);
+      return;
+    }
+    if (mode > 2) {
+      ESP_LOGW(TAG, "Remote mode %u out of range — ignoring frame", (unsigned) mode);
+      return;
+    }
+    if (timer > 480) {
+      ESP_LOGW(TAG, "Remote timer %u out of range — ignoring frame", (unsigned) timer);
+      return;
+    }
+
+    // Send only what actually changed — one button press otherwise costs five
+    // UART frames, and the MCU echoes each one back as a state push.
+    last_control_time_ = millis();
+    if (power != desired_.power)             { desired_.power = power;
+                                               send_cmd_bool_(RES_POWER, power); }
+    if (speed != desired_.speed)             { desired_.speed = speed;
+                                               send_cmd_byte_(RES_SPEED, speed); }
+    if (mode != desired_.mode)               { desired_.mode = mode;
+                                               send_cmd_byte_(RES_MODE, mode); }
+    if (osc != desired_.oscillation)         { desired_.oscillation = osc;
+                                               send_cmd_bool_(RES_OSC_ONOFF, osc); }
+    if (timer != desired_.timer_min)         { desired_.timer_min = timer;
+                                               send_cmd_uint16_(RES_TIMER, timer); }
+
+    // Reflect in HA immediately — same reasoning as in control().
+    this->state       = desired_.power;
+    this->speed       = desired_.speed;
+    this->oscillating = desired_.oscillation;
+    this->set_preset_mode_(preset_name_(desired_.mode));
+    this->publish_state();
+  }
 
   // ── BLE beacon → MCU report, resource 0x1F41 (EXPERIMENTAL) ───────────────
   // Forwards the remote's raw 8-byte beacon payload to the MCU. If the MCU is

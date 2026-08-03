@@ -1,0 +1,200 @@
+# DM Fan — Fernbedienung steuert den Fan (DES-Entschlüsselung aktiv)
+# ──────────────────────────────────────────────────────────────────────────────
+# Das ist die eigentliche Nutzungskonfiguration: die Fernbedienung sendet ihre
+# Tastendrücke als verschlüsselten BLE-Beacon, dm_fan entschlüsselt sie mit DES
+# und setzt den Fan-Zustand über UART.
+#
+# ⚠️ VORAUSSETZUNG: der `ble_key` aus dem NVS des Fans
+#
+#   Der Schlüssel ist GERÄTESPEZIFISCH und steht nur im NVS des Fans, solange
+#   dort noch die Original-Firmware lief. Ohne ihn werden Beacons zwar geloggt,
+#   aber nicht ausgeführt.
+#
+#   Auslesen (VOR dem Flashen von ESPHome!):
+#     esptool.py --port COMx read_flash 0x9000 0x4000 nvs_backup.bin
+#
+#   Im Dump nach dem Eintrag `ble_key` suchen. Achtung, zwei Stolperfallen:
+#     - Bei `type=0x41` (blob) mit `span=2` stehen die 8 Nutzbytes NICHT im
+#       Metadaten-Eintrag, sondern am Anfang des FOLGENDEN 32-Byte-Blocks.
+#     - NVS ist wear-levelled: es gibt mehrere Kopien. Die mit echter CRC
+#       nehmen, nicht die mit `ffffffff`.
+#
+#   Gegenprobe: `ble_model` muss 0x0201 (=513) sein und `ble_mac` die MAC der
+#   Fernbedienung. Steht dort `ble_model=0`, war der Fan nie gepairt.
+#
+# ⚠️ Fernbedienung NICHT neu koppeln (Power+M)! Ein neuer Bond erzeugt einen
+#    neuen Schlüssel und der gesicherte `ble_key` wird ungültig.
+#
+# 🔒 Der Schlüssel gehört in secrets.yaml, nicht hierher:
+#      # secrets.yaml
+#      dm_ble_key: "00 11 22 33 44 55 66 77"   # <- DEIN Schlüssel, nicht dieser!
+# ──────────────────────────────────────────────────────────────────────────────
+
+substitutions:
+  device_name: dreammaker-fan
+  friendly_name: "Dream Maker Fan"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  comment: "Zeico / Dream Maker Smart Fan — lokal, mit BLE-Fernbedienung"
+  min_version: "2026.4.5"
+  project:
+    name: "d0np3p3.dreammaker-fan"
+    version: "4.0.0-beta"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+    advanced:
+      sram1_as_iram: true
+
+logger:
+  level: INFO      # DEBUG nur zum Fehlersuchen — INFO zeigt die Remote-Zeilen
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${device_name} Fallback"
+    password: !secret wifi_ap_password
+
+captive_portal:
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/d0np3p3/esphome-dreammaker-fan
+      ref: v4.0.0-beta
+    refresh: 0s
+    components: [dm_fan]
+
+uart:
+  id: uart_bus
+  tx_pin: GPIO17
+  rx_pin: GPIO16
+  baud_rate: 19200
+
+# ── BLE-Scanner ──────────────────────────────────────────────────────────────
+# window/interval sind hier auf Dauerbetrieb ausgelegt: hoch genug, um die
+# Kommando-Beacons zuverlässig zu erwischen (die Remote wiederholt jeden
+# Tastendruck sehr oft), aber niedrig genug, dass WLAN stabil bleibt.
+# Die Debug-Werte 320/300 ms sind ~94 % Duty-Cycle und stören das WLAN.
+esp32_ble_tracker:
+  scan_parameters:
+    active: false
+    interval: 200ms
+    window: 100ms
+
+fan:
+  - platform: dm_fan
+    id: my_fan
+    name: "DM Fan"
+    uart_id: uart_bus
+    ble_remote: true
+    ble_key: !secret dm_ble_key      # 8 Byte Hex aus dem NVS
+    # ble_report_to_mcu: false       # Sackgasse — MCU ACKt, tut aber nichts
+    mcu_version:
+      name: "MCU Version"
+      entity_category: diagnostic
+    temperature:
+      name: "Temperatur"
+      entity_category: diagnostic
+    humidity:
+      name: "Luftfeuchtigkeit"
+      entity_category: diagnostic
+
+select:
+  - platform: template
+    name: "Oszillationswinkel"
+    icon: "mdi:angle-obtuse"
+    entity_category: config
+    optimistic: true
+    initial_option: "90°"
+    options: ["30°", "60°", "90°", "120°", "140°"]
+    set_action:
+      lambda: |-
+        int deg = 90;
+        if (x == "30°")  deg = 30;
+        if (x == "60°")  deg = 60;
+        if (x == "90°")  deg = 90;
+        if (x == "120°") deg = 120;
+        if (x == "140°") deg = 140;
+        id(my_fan)->set_roll_angle(deg);
+
+number:
+  - platform: template
+    name: "Timer (Stunden)"
+    icon: "mdi:timer-outline"
+    min_value: 0
+    max_value: 8
+    step: 1
+    entity_category: config
+    optimistic: true
+    set_action:
+      lambda: "id(my_fan)->set_timer_hours(x);"
+
+switch:
+  - platform: template
+    name: "Kindersicherung"
+    icon: "mdi:baby-carriage"
+    entity_category: config
+    optimistic: true
+    turn_on_action:  { lambda: "id(my_fan)->set_child_lock(true);" }
+    turn_off_action: { lambda: "id(my_fan)->set_child_lock(false);" }
+
+  - platform: template
+    name: "LED Anzeige"
+    icon: "mdi:led-on"
+    entity_category: config
+    optimistic: true
+    turn_on_action:  { lambda: "id(my_fan)->set_led(true);" }
+    turn_off_action: { lambda: "id(my_fan)->set_led(false);" }
+
+  - platform: template
+    name: "Tastentöne"
+    icon: "mdi:volume-high"
+    entity_category: config
+    optimistic: true
+    turn_on_action:  { lambda: "id(my_fan)->set_sound(true);" }
+    turn_off_action: { lambda: "id(my_fan)->set_sound(false);" }
+
+sensor:
+  - platform: uptime
+    name: "Uptime"
+    icon: "mdi:timer-outline"
+    entity_category: diagnostic
+
+  - platform: wifi_signal
+    name: "WiFi Signal"
+    icon: "mdi:wifi"
+    update_interval: 60s
+    entity_category: diagnostic
+
+text_sensor:
+  - platform: version
+    name: "ESPHome Version"
+    icon: "mdi:package-up"
+    entity_category: diagnostic
+
+button:
+  - platform: template
+    name: "Nach Links drehen"
+    icon: "mdi:pan-left"
+    on_press:
+      lambda: "id(my_fan)->rotate_left();"
+
+  - platform: template
+    name: "Nach Rechts drehen"
+    icon: "mdi:pan-right"
+    on_press:
+      lambda: "id(my_fan)->rotate_right();"

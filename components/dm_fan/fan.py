@@ -28,6 +28,27 @@ CONF_MCU_VERSION      = "mcu_version"
 CONF_LOG_RAW_FRAMES   = "log_raw_frames"
 CONF_BLE_REMOTE       = "ble_remote"
 CONF_BLE_REPORT_TO_MCU = "ble_report_to_mcu"
+CONF_BLE_KEY          = "ble_key"
+
+
+def _ble_key(value):
+    """8-byte DES key for the remote payload, as hex.
+
+    Accepts "00 11 22 33 44 55 66 77", "0011223344556677" or with colons.
+    This is a PER-DEVICE SECRET read from the fan's NVS (`ble_key`) — it belongs
+    in secrets.yaml, not in the device config.
+    """
+    value = cv.string_strict(value)
+    cleaned = value.replace(" ", "").replace(":", "").replace("-", "")
+    if len(cleaned) != 16:
+        raise cv.Invalid(
+            f"ble_key must be exactly 8 bytes (16 hex digits), got {len(cleaned)//2} bytes"
+        )
+    try:
+        raw = bytes.fromhex(cleaned)
+    except ValueError as err:
+        raise cv.Invalid(f"ble_key is not valid hex: {err}") from err
+    return list(raw)
 
 _BASE_SCHEMA = fan.fan_schema(DmFan).extend({
     cv.Required(CONF_UART_ID): cv.use_id(uart.UARTComponent),
@@ -37,6 +58,9 @@ _BASE_SCHEMA = fan.fan_schema(DmFan).extend({
     # experimental UART forward to the MCU (resource 0x1F41) — off by default.
     cv.Optional(CONF_BLE_REMOTE, default=False): cv.boolean,
     cv.Optional(CONF_BLE_REPORT_TO_MCU, default=False): cv.boolean,
+    # DES key for decoding remote button presses. Without it the beacons are
+    # logged but cannot be acted on.
+    cv.Optional(CONF_BLE_KEY): _ble_key,
     cv.Optional(CONF_MCU_VERSION): text_sensor.text_sensor_schema(
         entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
         icon="mdi:chip",
@@ -95,5 +119,7 @@ async def to_code(config):
     if config[CONF_BLE_REMOTE]:
         cg.add(var.set_ble_remote(True))
         cg.add(var.set_ble_report_to_mcu(config[CONF_BLE_REPORT_TO_MCU]))
+        if key := config.get(CONF_BLE_KEY):
+            cg.add(var.set_ble_key(key))
         # Register as a BLE advertisement listener on the tracker hub.
         await esp32_ble_tracker.register_ble_device(var, config)
