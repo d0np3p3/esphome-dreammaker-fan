@@ -6,25 +6,31 @@
 
 ---
 
-## 🔴 Prio 1: DES-Entschlüsselung in dm_fan.h einbauen
+## 🔴 Prio 1: Auf Hardware testen ⬅️ NÄCHSTER SCHRITT
 
-Alles Nötige ist bekannt. Ablauf pro Kommando-Beacon (`status=0x02`):
-1. 8 Byte mit DES-ECB und dem `ble_key` entschlüsseln
-2. Prüfsumme validieren: `byte[7] == sum(byte[0..6]) & 0xFF`
-3. Zielzustand aus `byte[1..6]` lesen
-4. Zustand über die vorhandenen `0x2347`-Kommandos setzen (laufen bereits)
+Der Code ist fertig (`623936b`), aber **noch nie auf dem Gerät gelaufen**.
 
-- [ ] Config-Option `ble_key` (8 Byte Hex) — **pro Gerät, kein Default**
-- [ ] DES über mbedTLS (`mbedtls/des.h`) einbinden
-      - [ ] Prüfen ob `MBEDTLS_DES_C` im ESP-IDF-Build aktiv ist (DES ist
-            deprecated, manche Konfigurationen schalten es ab)
-      - [ ] Falls nicht: über `sdkconfig`-Option aktivieren oder DES
-            selbst implementieren (~200 Zeilen, Blockgröße 8)
-- [ ] Payload-Struct dekodieren + Prüfsumme validieren
-- [ ] Ungültige Prüfsumme → verwerfen und loggen (Schutz vor Fremdgeräten)
-- [ ] Zustand anwenden; Taste in `byte[0]` fürs Log nutzen
-- [ ] `ble_report_to_mcu` als Sackgasse markieren oder entfernen —
-      rohes Weiterleiten funktioniert nicht (MCU ACKt, tut aber nichts)
+- [ ] `remote_control.yaml` mit eigenem `ble_key` in `secrets.yaml` bauen
+- [ ] **Compile-Test** — die Schemaanbindung (`std::array` per Codegen) konnte
+      hier nicht geprüft werden, ESPHome ließ sich nicht installieren
+- [ ] Alle 5 Tasten durchtesten: Power, Speed (4 Stufen), Mode (3), Oszillation,
+      Timer (5 Stufen)
+- [ ] Log prüfen: `Remote [Power]: power=1 speed=70 mode=0 osc=1 timer=0min`
+- [ ] Bei `checksum mismatch` → falscher `ble_key`
+
+### ✅ Erledigt (2026-08-03)
+
+- [x] Config-Option `ble_key` (8 Byte Hex, akzeptiert Leerzeichen/Doppelpunkte)
+- [x] DES **selbst implementiert** (`components/dm_fan/des.h`) statt mbedTLS —
+      `MBEDTLS_DES_C` ist in ESP-IDF standardmäßig AUS, eine sdkconfig-
+      Abhängigkeit wäre eine Fehlerquelle für jeden Nutzer
+      - verifiziert gegen FIPS-46-3-Vektor, Roundtrip und alle Capture-Payloads
+        (byte-identisch zu pycryptodome)
+- [x] Payload dekodieren + Prüfsumme validieren
+- [x] Ungültige Prüfsumme → verwerfen (Schutz vor fremden Fernbedienungen)
+- [x] Zusätzlich Wertebereiche prüfen, bevor etwas auf den UART geht
+- [x] Nur Deltas senden — sonst 5 UART-Frames pro Tastendruck statt 1
+- [x] `ble_report_to_mcu` als bestätigte Sackgasse markiert
 
 ### Offene Design-Frage — woher bekommt der Nutzer den `ble_key`?
 
