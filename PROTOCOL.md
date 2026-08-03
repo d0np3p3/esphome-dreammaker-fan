@@ -278,16 +278,61 @@ Time          Ctr   St    Payload (8 bytes)
    what our earlier unbound measurement saw, hence the wrong conclusion.
 5. **Counter resets to `0x01` after re-pairing** — a useful "freshly paired" marker.
 
-### 🔑 Key consequence: no crypto break needed
+### 🔓 SOLVED 2026-08-03 — the payload is DES-ECB, and it fully decodes
 
-Because the mapping *target-state → 8-byte payload* is **deterministic**, we do
-**not** need to decrypt anything. A **learn/teach-in table** is sufficient:
-record the payload for each state once, then match incoming payloads against the
-table and apply the stored state. This is how classic RF-remote integrations work
-and it sidesteps the cipher entirely. The table is per-remote (tied to its bond),
-so it must be learned per user — a "learn mode" in the component.
+The 8-byte payload is **single DES in ECB mode**, keyed with the 8-byte
+`ble_key` stored in the fan's NVS. Decrypting the 18 captured payloads yields a
+clean, self-consistent 8-byte state struct — no learn table required.
 
-**This replaces the previous GATT-only plan as the primary Phase 3 route.**
+```
+byte  field        values
+────  ───────────  ────────────────────────────────────────────────
+ [0]  button       0xF1 Timer · 0xF2 Oscillation · 0xF3 Speed
+                   0xF4 Power · 0xF5 Mode
+ [1]  power        0 / 1
+ [2]  speed        0x01=1 · 0x23=35 · 0x46=70 · 0x64=100  (the 4 gears)
+ [3]  mode         0 direct · 1 natural · 2 smart
+ [4]  oscillation  0 / 1
+ [5]  reserved     always 0x00
+ [6]  timer        0x00=0 · 0x3C=60 · 0x78=120 · 0xB4=180 · 0xF0=240 min
+ [7]  checksum     sum(byte[0..6]) & 0xFF
+```
+
+**Evidence.** Against a random-decryption baseline the fit is unambiguous:
+
+| metric | random expectation | DES with `ble_key` |
+|--------|-------------------|--------------------|
+| bytes < 16 | 6.25 % | **66.7 %** |
+| zero bytes | 0.39 % | **34.7 %** |
+| checksum `byte[7] == sum(byte[0..6])` | ~0.4 % of rows | **18 / 18 rows** |
+
+Every field lands exactly on its documented set: the four speed gears, the five
+timer steps, three modes. The capture sequence also decodes as a coherent
+session — two Power presses, a four-step Speed cycle, a three-step Mode cycle,
+an Oscillation toggle, a five-step Timer cycle — matching how the buttons were
+actually pressed.
+
+**Cross-check:** the same key produces pure noise on the older 23-payload
+capture (byte-value distribution indistinguishable from random, no checksum
+hits). That capture is from a different bond era — which independently confirms
+the key is bond-specific and that this key belongs to the *current* bond.
+
+**Byte [0] is the pressed button, bytes [1..6] are the complete resulting target
+state.** The remote sends the full state, not just a key ID — consistent with
+its LEDs mirroring fan state.
+
+> 🔒 The `ble_key` value is a **per-device secret** and is deliberately not
+> committed here. It is read from the fan's NVS (`nvs` partition at `0x9000`,
+> key `ble_key`, 8-byte blob). Each user must supply their own; see the NVS
+> section below for how to extract it.
+
+**Implementation note:** ESP-IDF ships mbedTLS, which provides DES
+(`mbedtls/des.h`: `mbedtls_des_setkey_dec` + `mbedtls_des_crypt_ecb`). Verify
+`MBEDTLS_DES_C` is enabled in the build — DES is deprecated and some configs
+disable it by default.
+
+This supersedes the learn-table plan: decryption is exact, works for any state
+without teach-in, and needs no per-user capture session.
 
 ### UART forward to MCU — resource `0x1F41` (EXPERIMENTAL, unconfirmed)
 

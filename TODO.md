@@ -1,104 +1,88 @@
 # DreamMaker Fan — Open Tasks
 
-> **Richtungswechsel 2026-07-31** (aus Handoff der Parallel-Session):
-> Tasten werden **als BLE-Advertisement** gesendet (`status=0x02`, 8-Byte
-> Payload), **nicht** über GATT. Die alte "Beacon ausgeschlossen"-Annahme war an
-> einer *ungebundenen* Remote gemessen und ist widerlegt. Siehe PROTOCOL.md.
+> **Durchbruch 2026-08-03:** Die 8-Byte-Beacon-Payload ist **DES-ECB** mit dem
+> `ble_key` aus dem NVS. Vollständig dekodiert inkl. Prüfsumme — 18/18 Payloads
+> konsistent. Lerntabelle wird nicht mehr gebraucht. Siehe PROTOCOL.md.
 
 ---
 
-## 🔴 Prio 1: Beacon-Lerntabelle aufbauen (neuer Hauptweg)
+## 🔴 Prio 1: DES-Entschlüsselung in dm_fan.h einbauen
 
-Die Zuordnung *Zielzustand → 8-Byte-Payload* ist **deterministisch** (bewiesen
-durch 4 Wiederholungen im Capture). Deshalb ist **keine Entschlüsselung nötig** —
-eine Lerntabelle reicht.
+Alles Nötige ist bekannt. Ablauf pro Kommando-Beacon (`status=0x02`):
+1. 8 Byte mit DES-ECB und dem `ble_key` entschlüsseln
+2. Prüfsumme validieren: `byte[7] == sum(byte[0..6]) & 0xFF`
+3. Zielzustand aus `byte[1..6]` lesen
+4. Zustand über die vorhandenen `0x2347`-Kommandos setzen (laufen bereits)
 
-- [ ] Remote an einen Fan binden (sonst nur Idle-Heartbeats!)
-      - Fan: *Head-shaking + Timer* → 4 LEDs blinken
-      - Remote: *Power + M* → 8 LEDs blinken
-      - Taste am Fan → Bind + Bestätigungston
-- [ ] ESPHome-Fan als **passiven Scanner** danebenstellen (`ble_remote: true`)
-- [ ] Jede Aktion einzeln auslösen, Payload + resultierenden Fan-Zustand notieren:
-      - Power ⏻ (kurz) → On/Off
-      - M kurz → Speed-Cycle (4 Stufen = 4 Payloads)
-      - M lang → Modus-Cycle (Direct/Natural/Smart = 3 Payloads)
-      - Head-shaking ∿ → Oszillation On/Off
-      - Clock 🕐 → Timer-Cycle (0/1/2/3/4h = 5 Payloads)
-- [ ] Tabelle in PROTOCOL.md eintragen (Payload ↔ Zielzustand)
-- [ ] Prüfen: liefert **unsere** Remote (`4B:F2:7E:47:E5:6E`) dieselben Chiffrate
-      wie im alten 23-Payload-Capture? Wenn ja → Tabelle direkt wiederverwendbar
+- [ ] Config-Option `ble_key` (8 Byte Hex) — **pro Gerät, kein Default**
+- [ ] DES über mbedTLS (`mbedtls/des.h`) einbinden
+      - [ ] Prüfen ob `MBEDTLS_DES_C` im ESP-IDF-Build aktiv ist (DES ist
+            deprecated, manche Konfigurationen schalten es ab)
+      - [ ] Falls nicht: über `sdkconfig`-Option aktivieren oder DES
+            selbst implementieren (~200 Zeilen, Blockgröße 8)
+- [ ] Payload-Struct dekodieren + Prüfsumme validieren
+- [ ] Ungültige Prüfsumme → verwerfen und loggen (Schutz vor Fremdgeräten)
+- [ ] Zustand anwenden; Taste in `byte[0]` fürs Log nutzen
+- [ ] `ble_report_to_mcu` als Sackgasse markieren oder entfernen —
+      rohes Weiterleiten funktioniert nicht (MCU ACKt, tut aber nichts)
 
-### Offene Frage zur Architektur
+### Offene Design-Frage
 
-Die Lerntabelle ist **pro Remote** (an den Bond gekoppelt). Für andere Nutzer
-braucht es einen **Learn-Mode** in der Komponente statt fest kodierter Werte.
-→ Design-Entscheidung nötig, bevor Phase 3 implementiert wird.
-
----
-
-## 🟡 Prio 2: `0x1F44`-Fix verifizieren (Code bereits geändert)
-
-`on_action1_()` sendete `data_len=0`, die echte Firmware sendet
-`data_len=1, data=[0x01]` ("agree to pair"). Fix ist eingebaut, **noch nicht
-auf Hardware getestet**.
-
-- [ ] Flashen und am Fan *Head-shaking + Timer* halten
-- [ ] Log prüfen: `MCU remote-pairing trigger (0x1F44) → ACK agree=1`
-- [ ] Prüfen ob der Fan jetzt tatsächlich in den Pairing-Modus geht
-      (vorher evtl. blockiert durch das unvollständige ACK)
-- [ ] Falls ja: das war ein echter Blocker für das gesamte Pairing über ESPHome
+Wie kommt der Nutzer an seinen `ble_key`? Er steht nur im NVS des **originalen**
+Fans — wer schon auf ESPHome geflasht hat, ohne vorher zu sichern, kommt nicht
+mehr dran. Optionen:
+- Anleitung zum NVS-Dump **vor** dem Flashen (`esptool read_flash 0x9000 0x4000`)
+- Alternativ Lerntabelle als Rückfallweg für genau diese Nutzer
 
 ---
 
-## 🟢 Prio 3: GATT-Weg — Status klären
+## 🟡 Prio 2: `ble_key` sichern (falls noch nicht geschehen)
 
-Der Challenge-Echo (FF01→FF02) **funktioniert** (Blinken stoppt), liefert aber
-keine Tastenevents. Vermutlich Teil des *Bind*-Protokolls, nicht des Kommandowegs.
-
-- [ ] Entscheiden: `ble_capture.yaml` weiter pflegen oder archivieren?
-- [ ] Falls Beacon-Weg (Prio 1) funktioniert → GATT nur noch fürs Binden nutzen
+- [ ] NVS des gepairten Fans sichern, solange Original-FW noch drauf ist
+      `esptool.py --port COMx read_flash 0x9000 0x4000 nvs_backup.bin`
+- [ ] `ble_key` extrahieren (8-Byte-Blob; **Achtung:** bei `type=0x41`, `span=2`
+      stehen die Daten am Anfang des FOLGENDEN 32-Byte-Blocks, nicht im
+      Metadaten-Eintrag; NVS ist wear-levelled → Kopie mit echter CRC nehmen)
+- [ ] Fernbedienung **nicht** neu koppeln (Power+M) — neuer Bond = neuer Key
 
 ---
 
-## 🔵 Prio 4: Phase 3 — dm_fan.h Implementierung
+## 🟢 Prio 3: Aufräumen / Verifikation
 
-(erst wenn Lerntabelle steht)
-
-- [ ] Beacon-Handler: `status=0x02` → Payload gegen Lerntabelle matchen
-- [ ] Gematchten Zustand auf die Fan-Entities anwenden
-- [ ] Learn-Mode: Payload + aktueller Fan-Zustand speichern (NVS/`restore_value`)
-- [ ] `ble_report_to_mcu` überdenken — brauchen wir den 0x1F41-Weg überhaupt,
-      wenn wir den Zustand direkt selbst setzen?
+- [ ] Nach dem Einbau: alle 5 Tasten durchtesten, ob der Fan korrekt folgt
+- [ ] Prüfen ob `byte[5]` (immer 0) doch etwas kodiert — z. B. Winkel?
+      Im Capture wurde der Winkel nie über die Fernbedienung verstellt, und die
+      Fernbedienung hat auch keine Winkel-Taste — vermutlich echt ungenutzt.
+- [ ] `ble_capture.yaml` / `ble_discovery.yaml` archivieren — der GATT-Weg ist
+      nicht mehr nötig (Challenge-Echo gehört zum Bind, nicht zum Kommandoweg)
 - [ ] Tag `v4.0.0` (stable)
 
 ---
 
-## ⚪ Prio 5: Hardware-Wege (beide bisher ergebnislos)
+## ⚪ Prio 4: Nicht mehr nötig / eingestellt
 
-- [ ] **Remote SWD**: ST-Link meldet `chipid: 0x000`, auch mit
-      `--connect-under-reset` → Debug-Port vermutlich gesperrt.
-      Verkabelungsfehler nicht 100 % ausgeschlossen (Spannung/Kontinuität
-      nicht durchgemessen). Niedrige Priorität, da Beacon-Weg trägt.
-- [ ] **Remote UART**: nur Rauschen mit lesbaren Fragmenten, kein
-      validiertes Frame extrahiert. Offene Hypothese: RTS/CTS-Flusskontrolle.
-- [ ] **Fan-MCU SWD**: noch nicht versucht — würde `0x1F41`-Format bestätigen
+- ~~Lerntabelle aufbauen~~ — durch DES-Entschlüsselung überflüssig
+- ~~Rohes Beacon-Forwarding an die MCU~~ — Format bestätigt (MCU ACKt), aber
+  wirkungslos: das ESP-Modul war die entschlüsselnde Seite, nicht die MCU
+- **Remote SWD**: ST-Link meldet `chipid: 0x000` → Debug-Port vermutlich
+  gesperrt. Nicht mehr nötig.
+- **Remote UART**: nur Rauschen, kein validiertes Frame. Nicht mehr nötig.
 
 ---
 
-## 📝 Prio 6: Offene Doku-/Community-Aufgaben
+## 📝 Prio 5: Doku / Community
 
 - [ ] **Korrektur in `dhewg/esphome-miot#50` posten**: unser alter Kommentar vom
       19. Mai behauptet `action:81 / resource:0x70` für die WiFi-Query-Antwort.
-      Das war Spekulation aus dem Binary und ist **falsch** — korrekt ist
-      `action:82 / resource:0x78` (echot die Query-Resource).
-      Nachtrag-Kommentar, alten nicht löschen.
-- [ ] Flash-Backup Hälfte 2 (`0x200000`–`0x400000`) des gepairten Fans
-      nachziehen — Hälfte 1 ist sauber gesichert
+      Korrekt ist `action:82 / resource:0x78` (echot die Query-Resource).
+- [ ] README: BLE-Fernbedienung als Feature dokumentieren, inkl. der
+      Einschränkung, dass der `ble_key` vorher gesichert werden muss
+- [ ] Flash-Backup Hälfte 2 (`0x200000`–`0x400000`) nachziehen
 
 ---
 
 ## 🔒 Sicherheitshinweis
 
-Aus dem gepairten NVS-Dump stammen **echte Geräte-Secrets** (`ble_key`,
-`device_key`, `device_id`, WiFi-Zugangsdaten). Diese sind **bewusst nicht** in
-diesem öffentlichen Repo dokumentiert — nur Struktur und Fundort. Lokal halten.
+`ble_key`, `device_key`, `device_id` und WiFi-Zugangsdaten sind **pro Gerät
+geheim** und stehen **nicht** in diesem öffentlichen Repo — nur Struktur und
+Fundort. Der `ble_key` gehört in `secrets.yaml`, nicht in die Gerätekonfiguration.
