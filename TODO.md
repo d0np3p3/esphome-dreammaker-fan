@@ -21,19 +21,26 @@ Die Fernbedienung steuert den Fan. Alle fünf Tasten getestet, keine einzige
 
 Scan-Fenster `200ms/100ms` reicht — jeder Tastendruck kam an.
 
-### 🔍 Beobachtung zum Nachprüfen: Speed-Anzeige im Smart-Modus
+### ✅ Behoben: Speed im Smart-Modus (2026-08-03)
 
-Im Smart-Modus meldet die MCU eine selbst geregelte Drehzahl (`spd=50%`),
-während die Fernbedienung ihren Zielwert schickt (`speed=100`). HA zeigt 100.
+Im Smart-Modus regelt der Fan die Drehzahl **selbst** aus Temperatur und
+Luftfeuchtigkeit. Die MCU meldete `spd=50%`, HA zeigte aber dauerhaft `100`.
 
-Ursache: der Anti-Flap-Guard (`STALE_GUARD_MS = 250`) verwirft MCU-Frames, die
-kurz nach einem eigenen Kommando kommen — hier ist das aber keine Echo-Dopplung,
-sondern echte Information. Im Testlog folgte jeder MCU-Frame binnen ~40-90 ms auf
-einen Tastendruck, deshalb war nie ein ungesperrter Frame zu sehen.
+Zwei Fehler, beide behoben:
 
-- [ ] Prüfen: gleicht sich die Anzeige nach ein paar Sekunden Ruhe von selbst an?
-- [ ] Falls nein: Guard so verfeinern, dass er nur echte Echos verwirft
-      (z. B. Vergleich gegen den zuletzt gesendeten Wert statt reiner Zeitfenster)
+1. **HA-Anzeige korrigierte sich nie.** Die MCU-Frames nach einem Tastendruck
+   tragen `echo != 0`, landen also im Echo-Zweig, der ohne Publish zurückkehrt —
+   und dabei die Änderungserkennung (`hw_state_`) auf den MCU-Wert setzt. Damit
+   war der falsche Wert dauerhaft eingefroren, kein späterer Frame konnte ihn
+   noch korrigieren. Jetzt wird im Smart-Modus die von der MCU gemeldete
+   Drehzahl übernommen.
+2. **Wir hätten die Regelung überschrieben.** Die Fernbedienung schickt in jedem
+   Payload ihre zuletzt manuell gewählte Stufe mit. Im Smart-Modus wird `speed`
+   jetzt nicht mehr an die MCU gesendet.
+
+- [ ] Auf Hardware gegenprüfen: Smart-Modus einstellen, dann zeigt HA die
+      tatsächlich geregelte Drehzahl und folgt ihr, wenn sich Temperatur oder
+      Luftfeuchtigkeit ändern
 
 ### ✅ Erledigt (2026-08-03)
 

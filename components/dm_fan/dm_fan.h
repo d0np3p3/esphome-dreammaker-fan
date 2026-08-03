@@ -36,6 +36,12 @@ constexpr uint16_t BLE_COMPANY_DM = 0x4D44;  // little-endian "DM" = DreamMaker
 constexpr uint8_t BLE_STATUS_IDLE    = 0x01;
 constexpr uint8_t BLE_STATUS_COMMAND = 0x02;
 
+// Fan modes. In Smart mode the fan sets its own speed from temperature and
+// humidity, so speed is MCU-owned there and must not be overwritten.
+constexpr uint8_t MODE_DIRECT  = 0;
+constexpr uint8_t MODE_NATURAL = 1;
+constexpr uint8_t MODE_SMART   = 2;
+
 // Resource IDs for CMD_SET — confirmed from 31 TX captures
 constexpr uint8_t RES_POWER     = 0x00;
 constexpr uint8_t RES_SPEED     = 0x01;
@@ -643,6 +649,21 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
       // Keep the change-detection baseline current so the next spontaneous
       // frame is not flagged as a (redundant) state change.
       hw_state_ = n;
+
+      // Exception — Smart mode: the fan derives its speed from temperature and
+      // humidity on its own, so the value we pushed optimistically (the gear the
+      // remote transmits) is NOT what the fan actually runs at. Correct HA from
+      // the echo, otherwise the wrong number sticks forever: this branch just
+      // updated the change-detection baseline, so no later frame would fix it.
+      if (n.mode == MODE_SMART && this->speed != n.speed) {
+        ESP_LOGD(TAG, "Smart mode: MCU regulated speed to %u%% (we showed %u%%)",
+                 (unsigned) n.speed, (unsigned) this->speed);
+        desired_.speed = n.speed;
+        this->speed    = n.speed;
+        this->publish_state();
+        return;
+      }
+
       ESP_LOGD(TAG, "Echo of our cmd (ctr=%u) — HA already updated optimistically",
                (unsigned) echo);
       return;
@@ -861,7 +882,13 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
     last_control_time_ = millis();
     if (power != desired_.power)             { desired_.power = power;
                                                send_cmd_bool_(RES_POWER, power); }
-    if (speed != desired_.speed)             { desired_.speed = speed;
+    // In Smart mode the fan regulates speed itself from temperature/humidity.
+    // The remote still carries its last manual gear in every payload — pushing
+    // that would fight the fan's own regulation, so leave speed to the MCU.
+    // (`mode` is the NEW mode, so leaving Smart via the remote applies speed
+    // again in the same frame.)
+    if (mode != MODE_SMART && speed != desired_.speed)
+                                             { desired_.speed = speed;
                                                send_cmd_byte_(RES_SPEED, speed); }
     if (mode != desired_.mode)               { desired_.mode = mode;
                                                send_cmd_byte_(RES_MODE, mode); }
