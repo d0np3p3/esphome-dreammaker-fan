@@ -293,7 +293,7 @@ byte  field        values
  [2]  speed        0x01=1 · 0x23=35 · 0x46=70 · 0x64=100  (the 4 gears)
  [3]  mode         0 direct · 1 natural · 2 smart
  [4]  oscillation  0 / 1
- [5]  reserved     always 0x00 — remote has no angle control
+ [5]  roll_angle   always 0x00 — slot exists, this remote never fills it
  [6]  timer        0x00=0 · 0x3C=60 · 0x78=120 · 0xB4=180 · 0xF0=240 min
  [7]  checksum     sum(byte[0..6]) & 0xFF
 ```
@@ -320,6 +320,33 @@ the key is bond-specific and that this key belongs to the *current* bond.
 **Byte [0] is the pressed button, bytes [1..6] are the complete resulting target
 state.** The remote sends the full state, not just a key ID — consistent with
 its LEDs mirroring fan state.
+
+### Byte [5] is the `roll_angle` slot, not padding
+
+The payload mirrors the UART state layout field for field:
+
+```
+UART state:  data9   data10  data11  data12       data13      data14-15
+             power   speed   mode    roll_enable  roll_angle  power_delay
+
+Beacon:      [1]     [2]     [3]     [4]          [5]         [6]
+             power   speed   mode    oscillation  ——          timer
+```
+
+Five of six fields line up exactly, and the gap falls precisely on
+`roll_angle` — so byte [5] is the angle field by position, not spare padding.
+The same order appears in the cloud JSON (`power, mode, speed, roll_enable,
+roll_angle, power_delay`).
+
+It stays `0x00` because **this remote cannot control or display the angle**: the
+DM-FCB01 has four buttons, Head-shaking is a plain on/off toggle with no
+long-press function, and there is no angle indicator. The remote never learns
+the value, so it leaves the field empty — a fan-side or app-side sender would
+presumably populate it.
+
+Practical consequence: nothing to implement. Sending `0x00` as an angle would
+be wrong, and the field carries no information from this remote. The angle
+remains settable from HA, which already works.
 
 > 🔒 The `ble_key` value is a **per-device secret** and is deliberately not
 > committed here. It is read from the fan's NVS (`nvs` partition at `0x9000`,

@@ -816,7 +816,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
   //   [2] speed        0x01=1 · 0x23=35 · 0x46=70 · 0x64=100
   //   [3] mode         0 direct · 1 natural · 2 smart
   //   [4] oscillation  0/1
-  //   [5] reserved     always 0x00
+  //   [5] roll_angle   always 0x00 from this remote (see note in PROTOCOL.md)
   //   [6] timer        minutes: 0x00/3C/78/B4/F0 = 0/60/120/180/240
   //   [7] checksum     sum(byte[0..6]) & 0xFF
   //
@@ -866,16 +866,19 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
              btn, power, (unsigned) speed, (unsigned) mode, osc,
              (unsigned) timer);
 
-    // Full plaintext at DEBUG. byte[5] is 0x00 in every payload seen so far and
-    // appears to be genuinely unused: the remote has no angle control (the
-    // Head-shaking button is a plain on/off toggle with no long-press function),
-    // so there is no obvious field left for it to carry. Kept under observation
-    // rather than assumed dead — if it ever turns non-zero we want to know.
+    // Full plaintext at DEBUG. byte[5] is the roll_angle slot: the payload
+    // mirrors the UART state layout field for field (power, speed, mode,
+    // roll_enable, roll_angle, power_delay), and [5] falls exactly on
+    // roll_angle. It is 0x00 in every capture because this remote can neither
+    // set nor display the angle, so it never learns the value. Deliberately not
+    // applied — writing 0x00 as an angle would be wrong. Logged so a sender
+    // that does populate the field would be noticed.
     ESP_LOGD(TAG, "  decrypted: %02X %02X %02X %02X %02X %02X %02X %02X",
              p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
     if (p[5] != 0x00) {
-      ESP_LOGW(TAG, "  ⚠ byte[5]=0x%02X — expected 0x00, this byte was thought "
-                    "unused. Please report this line.", p[5]);
+      ESP_LOGW(TAG, "  ⚠ byte[5]=0x%02X — roll_angle slot is populated! "
+                    "This remote always sent 0x00. Please report this line.",
+               p[5]);
     }
     if (!known) {
       ESP_LOGW(TAG, "  ⚠ unknown button 0x%02X — please report", p[0]);

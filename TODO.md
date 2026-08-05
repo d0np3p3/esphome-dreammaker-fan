@@ -39,13 +39,16 @@ Schlüssel gibt.
 - [ ] Smart-Modus: zeigt HA jetzt die tatsächlich geregelte Drehzahl und folgt
       ihr, wenn Temperatur/Luftfeuchtigkeit sich ändern?
       Debug-Log: `Smart mode: MCU regulated speed to X% (we showed Y%)`
-- [x] **`byte[5]` geklärt: echt ungenutzt.** Die Fernbedienung hat keine
-      Winkel-Steuerung — Head-shaking ist reines Ein/Aus ohne Langdruck
-      (bestätigt an Original-Fan + Original-Fernbedienung). Damit ist `byte[5]`
-      Reserve, kein Winkelfeld. Der Winkel bleibt HA-seitig steuerbar
-      (Select "Oszillationswinkel"), das funktioniert bereits.
-      Die Diagnose-Ausgabe bleibt drin: falls doch je ein Wert ≠ 0 auftaucht
-      oder ein unbekanntes Tastenbyte kommt, warnt der Code von selbst.
+- [x] **`byte[5]` geklärt: der `roll_angle`-Slot.** Die Beacon-Payload spiegelt
+      Feld für Feld das UART-State-Layout (`power, speed, mode, roll_enable,
+      roll_angle, power_delay`) — fünf von sechs Feldern stimmen überein, die
+      Lücke fällt genau auf `roll_angle`. Positionsbeweis, keine Vermutung.
+      Bleibt `0x00`, weil diese Fernbedienung den Winkel weder steuern noch
+      anzeigen kann (4 Tasten, Head-shaking nur Ein/Aus ohne Langdruck, keine
+      Winkel-LED) — sie kennt den Wert also gar nicht.
+      **Nichts zu implementieren:** `0x00` als Winkel zu senden wäre falsch.
+      Der Winkel bleibt HA-seitig steuerbar, das funktioniert bereits.
+      Die Diagnose-Warnung bleibt drin, falls ein anderer Sender das Feld füllt.
 
 ---
 
