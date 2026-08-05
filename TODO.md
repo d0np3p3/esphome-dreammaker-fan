@@ -39,17 +39,13 @@ Schlüssel gibt.
 - [ ] Smart-Modus: zeigt HA jetzt die tatsächlich geregelte Drehzahl und folgt
       ihr, wenn Temperatur/Luftfeuchtigkeit sich ändern?
       Debug-Log: `Smart mode: MCU regulated speed to X% (we showed Y%)`
-- [ ] **`byte[5]` klären — die Fernbedienung HAT eine Winkel-Taste.**
-      Meine frühere Notiz „keine Winkel-Taste" stammte aus dem DM-FCB01-
-      Handbuch, das nur vier Tasten auflistet, und war falsch.
-      `byte[5]` war in allen 18 Payloads `0x00` — aber der Winkel wurde nie
-      über die Fernbedienung verstellt. Damit ist es der Hauptverdächtige.
-      Test: Winkel-Taste drücken, Log auf DEBUG, diese Zeile ansehen:
-      `[D] decrypted: XX XX XX XX XX XX XX XX`
-      Bei `byte[5]` in {1E,3C,5A,78,8C} ist es der Winkel (30/60/90/120/140°).
-      Es warnt zusätzlich automatisch, sobald `byte[5]` erstmals ≠ 0 ist.
-- [ ] Winkel dann in `handle_remote_command_` anwenden (`set_roll_angle`) —
-      aktuell wird `byte[5]` ignoriert, Winkel-Drücke bleiben also wirkungslos
+- [x] **`byte[5]` geklärt: echt ungenutzt.** Die Fernbedienung hat keine
+      Winkel-Steuerung — Head-shaking ist reines Ein/Aus ohne Langdruck
+      (bestätigt an Original-Fan + Original-Fernbedienung). Damit ist `byte[5]`
+      Reserve, kein Winkelfeld. Der Winkel bleibt HA-seitig steuerbar
+      (Select "Oszillationswinkel"), das funktioniert bereits.
+      Die Diagnose-Ausgabe bleibt drin: falls doch je ein Wert ≠ 0 auftaucht
+      oder ein unbekanntes Tastenbyte kommt, warnt der Code von selbst.
 
 ---
 

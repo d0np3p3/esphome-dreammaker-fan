@@ -866,16 +866,16 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
              btn, power, (unsigned) speed, (unsigned) mode, osc,
              (unsigned) timer);
 
-    // Full plaintext at DEBUG. byte[5] was 0x00 in every payload captured so
-    // far and its meaning is still open — the oscillation angle is the leading
-    // candidate. Logging the raw block makes an unknown button identifiable
-    // without another capture session.
+    // Full plaintext at DEBUG. byte[5] is 0x00 in every payload seen so far and
+    // appears to be genuinely unused: the remote has no angle control (the
+    // Head-shaking button is a plain on/off toggle with no long-press function),
+    // so there is no obvious field left for it to carry. Kept under observation
+    // rather than assumed dead — if it ever turns non-zero we want to know.
     ESP_LOGD(TAG, "  decrypted: %02X %02X %02X %02X %02X %02X %02X %02X",
              p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
     if (p[5] != 0x00) {
-      ESP_LOGW(TAG, "  ⚠ byte[5]=0x%02X — first time this is non-zero! "
-                    "Angle bytes are 1E/3C/5A/78/8C (30/60/90/120/140°). "
-                    "Please report this line.", p[5]);
+      ESP_LOGW(TAG, "  ⚠ byte[5]=0x%02X — expected 0x00, this byte was thought "
+                    "unused. Please report this line.", p[5]);
     }
     if (!known) {
       ESP_LOGW(TAG, "  ⚠ unknown button 0x%02X — please report", p[0]);
