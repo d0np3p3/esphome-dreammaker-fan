@@ -156,7 +156,12 @@ proprietary, not Tuya/Xiaomi/Zigbee.
 | Battery | LR-AAA, 1.5 V |
 | Applies to | Dream Maker Feel Fan — Freedom / Flagship version |
 
-The remote has only **4 physical buttons** → button-capture set is 5 actions:
+> ⚠️ The button table below comes from the DM-FCB01 manual, which lists four
+> buttons. **The owner reports the remote also has an angle button**, so the
+> manual is incomplete or there are hardware variants. Treat this table as
+> incomplete.
+
+Buttons per the manual:
 
 | Button | Icon | Short press | Long press |
 |--------|------|-------------|------------|
@@ -293,7 +298,7 @@ byte  field        values
  [2]  speed        0x01=1 · 0x23=35 · 0x46=70 · 0x64=100  (the 4 gears)
  [3]  mode         0 direct · 1 natural · 2 smart
  [4]  oscillation  0 / 1
- [5]  reserved     always 0x00
+ [5]  angle?       0x00 in all captures so far — see note below
  [6]  timer        0x00=0 · 0x3C=60 · 0x78=120 · 0xB4=180 · 0xF0=240 min
  [7]  checksum     sum(byte[0..6]) & 0xFF
 ```

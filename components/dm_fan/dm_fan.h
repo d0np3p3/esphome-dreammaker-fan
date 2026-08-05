@@ -842,14 +842,18 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
       return;
     }
 
+    // Known button bytes. The DM-FCB01 manual lists four buttons, but the
+    // remote also has an angle button, so an unmapped byte here is expected
+    // rather than an error — flag it so it can be identified.
     const char *btn;
+    bool known = true;
     switch (p[0]) {
       case 0xF1: btn = "Timer";       break;
       case 0xF2: btn = "Oscillation"; break;
       case 0xF3: btn = "Speed";       break;
       case 0xF4: btn = "Power";       break;
       case 0xF5: btn = "Mode";        break;
-      default:   btn = "unknown";     break;
+      default:   btn = "unknown"; known = false; break;
     }
 
     const bool     power = p[1] != 0;
@@ -861,6 +865,21 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice
     ESP_LOGI(TAG, "Remote [%s]: power=%d speed=%u mode=%u osc=%d timer=%umin",
              btn, power, (unsigned) speed, (unsigned) mode, osc,
              (unsigned) timer);
+
+    // Full plaintext at DEBUG. byte[5] was 0x00 in every payload captured so
+    // far and its meaning is still open — the oscillation angle is the leading
+    // candidate. Logging the raw block makes an unknown button identifiable
+    // without another capture session.
+    ESP_LOGD(TAG, "  decrypted: %02X %02X %02X %02X %02X %02X %02X %02X",
+             p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+    if (p[5] != 0x00) {
+      ESP_LOGW(TAG, "  ⚠ byte[5]=0x%02X — first time this is non-zero! "
+                    "Angle bytes are 1E/3C/5A/78/8C (30/60/90/120/140°). "
+                    "Please report this line.", p[5]);
+    }
+    if (!known) {
+      ESP_LOGW(TAG, "  ⚠ unknown button 0x%02X — please report", p[0]);
+    }
 
     // Guard the values before they reach the MCU: a corrupted-but-checksum-
     // valid frame should not push nonsense onto the UART.
