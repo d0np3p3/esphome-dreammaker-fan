@@ -599,6 +599,20 @@ characteristic value rather than a per-connection random challenge. That fits
 the older capture, where the value differed *before* and *after* a successful
 bind.
 
+### FF01 never notifies - it is read-only in practice (2026-08-10)
+
+Registering for notifications on FF01 succeeds (`Register for notify on 0xFF01
+complete`), but **nothing is ever pushed** - not on connect, not on Power+M, not
+at any point during a multi-minute connection. With polling disabled
+(`update_interval: never`) the characteristic produced no data at all.
+
+Every value we have ever seen from FF01 therefore came from a **read**, not a
+notification. The characteristic advertises the NOTIFY property but does not use
+it, at least not in the states we could reach.
+
+Consequence: an ESPHome-side bind cannot be driven by "wait for the challenge,
+answer immediately". There is no challenge push to react to.
+
 ### ESPHome cannot complete the bind by echoing (2026-08-10)
 
 Echoing the FF01 value back to FF02 does **not** bind the remote. After the
