@@ -64,9 +64,12 @@
 substitutions:
   device_name: dreammaker-fan
   friendly_name: "Dream Maker Fan"
-  # MAC of the remote. Change this for a different remote - it shows up in the
-  # log as "DM remote beacon <MAC>".
-  remote_mac: "4B:F2:7E:47:E5:6E"
+  # MAC of the remote. EVERY remote has its own address - read it from the
+  # IDLE/CMD lines in the log and put it here, otherwise ble_client waits for a
+  # device that is not there ("Cannot poll, not connected").
+  #   4B:F2:7E:47:E5:6E = remote #1 (paired to the original fan)
+  #   84:0A:10:78:19:33 = remote #2 (unpaired) <- used for this experiment
+  remote_mac: "84:0A:10:78:19:33"
 
 esphome:
   name: ${device_name}
