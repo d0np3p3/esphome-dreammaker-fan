@@ -19,34 +19,33 @@
 #   then they ARE the key. A wrong key passes the checksum with probability
 #   1/256 per payload - a handful of button presses settles it.
 #
-# READ-ONLY. This config only reads FF01 and logs beacons. It does not write
-# anything to the remote.
+# PASSIVE CAPTURE ONLY. No GATT connection, no writes.
+#
+#   Holding a GATT connection makes the remote STOP ADVERTISING, so beacons and
+#   FF01 reads cannot happen at the same time. FF01 has already been read and is
+#   stable, so only the beacons are still missing.
 #
 # PROCEDURE - no NVS dump needed
-#   The remote only emits command beacons while it is bound to something. So
-#   bind it to a fan running ORIGINAL firmware, then read FF01 and capture the
-#   beacons with this config. Both halves of the test then exist and can be
-#   checked against each other offline.
+#   The remote only emits command beacons while bound to something, so bind it
+#   to a fan running ORIGINAL firmware first.
 #
-#   1. Power the ESPHome fan OFF (so its GATT client cannot grab the remote's
-#      connection during the pairing window)
-#   2. Pair the remote with the original-firmware fan the normal way:
+#   1. Pair the remote with the original-firmware fan the normal way:
 #        Fan: Head-shaking + Timer  -> 4 LEDs flash
 #        Remote: Power + M          -> 8 LEDs flash
 #        Press any key on the fan   -> confirmation tone
-#   3. Power the ESPHome fan back ON with this config
-#   4. Press buttons on the remote - Power, M, oscillation, timer, several
+#   2. Flash this config on the ESPHome fan
+#   3. Press buttons on the remote - Power, M, oscillation, timer, several
 #      times each. Expected:
-#        [W][dm_beacon] CMD st=02 ctr=03 payload= 92 43 A0 3F A6 59 2F AA
-#        [W][dm_bind]   KEY CANDIDATE (bytes 0-7): ...
-#   5. Send BOTH blocks.
+#        [W][dm_beacon] 84:0A:.. CMD st=02 ctr=03 payload= 92 43 A0 3F ...
+#   4. Send those CMD lines.
 #
 # THE TEST
-#   Does FF01[0..7] decrypt those payloads with a valid checksum? The pre-bind
-#   value of remote 84:0A:10:78:19:33 is already on record:
-#     FC 55 40 41 68 7C 7F 5F
-#   If FF01 now reads DIFFERENTLY, both values get tested - the older capture
-#   showed the value changing across a successful bind.
+#   Does FC 55 40 41 68 7C 7F 5F (FF01 of this remote, read while unpaired)
+#   decrypt those payloads with a valid checksum?
+#     yes -> the key can simply be read over GATT, no NVS dump ever needed
+#     no  -> the key is generated during pairing; NVS stays the only route
+#   If it fails, re-enable the ble_client block below to re-read FF01 in the
+#   now-bound state and test that value too.
 #
 # IF THE CONNECTION FAILS ("Cannot poll, not connected")
 #   1. Check the MAC in the IDLE lines. After Power+M the remote may advertise
@@ -140,15 +139,14 @@ uart:
   rx_pin: GPIO16
   baud_rate: 19200
 
-# BLE scanner. Window is deliberately SMALL here: a ~94% duty cycle (as used
-# for passive capture) leaves the radio almost no time to run a connection
-# procedure, which is very likely why ble_client could not connect. Scanning
-# and connecting compete for the same radio.
+# BLE scanner. Back to a high duty cycle: with the GATT client disabled there
+# is no connection procedure competing for the radio, and catching every
+# command beacon is now the only job.
 esp32_ble_tracker:
   scan_parameters:
-    active: true
+    active: false
     interval: 320ms
-    window: 30ms
+    window: 300ms
   on_ble_advertise:
     then:
       - lambda: |-
@@ -180,14 +178,26 @@ esp32_ble_tracker:
             }
           }
 
-# GATT client - connects to the remote
-ble_client:
-  - mac_address: ${remote_mac}
-    id: dm_remote
-    on_connect:
-      - lambda: 'ESP_LOGW("dm_bind", "CONNECTED - waiting for FF01 NOTIFY");'
-    on_disconnect:
-      - lambda: 'ESP_LOGW("dm_bind", "disconnected");'
+# GATT client - DISABLED ON PURPOSE.
+#
+# While the ESP holds a GATT connection the remote STOPS ADVERTISING, so no
+# beacons arrive at all - not even idle ones. Reading FF01 and capturing
+# beacons are therefore mutually exclusive; you cannot do both at once.
+#
+# FF01 has already been read and is stable across 16 polls over many minutes:
+#   remote 84:0A:10:78:19:33 -> FC 55 40 41 68 7C 7F 5F
+# so there is nothing left to read. Beacon capture is what matters now.
+#
+# Re-enable this block (and the sensor below) only if FF01 needs re-reading,
+# e.g. to check whether the value changed after a successful bind.
+#
+# ble_client:
+#   - mac_address: ${remote_mac}
+#     id: dm_remote
+#     on_connect:
+#       - lambda: 'ESP_LOGW("dm_bind", "CONNECTED - waiting for FF01 NOTIFY");'
+#     on_disconnect:
+#       - lambda: 'ESP_LOGW("dm_bind", "disconnected");'
 
 globals:
   - id: last_beacon_ctr
@@ -195,48 +205,50 @@ globals:
     restore_value: no
     initial_value: '-1'
 
-# Read FF01. The sensor platform is the way to get at the RAW notify bytes -
-# the return value is irrelevant, only the lambda matters.
-sensor:
-  - platform: ble_client
-    ble_client_id: dm_remote
-    id: ff01_notify
-    name: "FF01 raw"
-    internal: true
-    type: characteristic
-    service_uuid: '00FF'
-    characteristic_uuid: 'FF01'
-    # notify: true is REQUIRED - without it the lambda never fires
-    # (esphome/esphome#12386).
-    notify: true
-    lambda: |-
-      char buf[8];
-      std::string hex;
-      for (auto v : x) { snprintf(buf, sizeof(buf), "%02X ", v); hex += buf; }
-      ESP_LOGW("dm_bind", "FF01 NOTIFY (%u B): %s", (unsigned) x.size(), hex.c_str());
+# FF01 reader - disabled together with the ble_client above.
+#
+# # Read FF01. The sensor platform is the way to get at the RAW notify bytes -
+# # the return value is irrelevant, only the lambda matters.
+# sensor:
+#   - platform: ble_client
+#     ble_client_id: dm_remote
+#     id: ff01_notify
+#     name: "FF01 raw"
+#     internal: true
+#     type: characteristic
+#     service_uuid: '00FF'
+#     characteristic_uuid: 'FF01'
+#     # notify: true is REQUIRED - without it the lambda never fires
+#     # (esphome/esphome#12386).
+#     notify: true
+#     lambda: |-
+#       char buf[8];
+#       std::string hex;
+#       for (auto v : x) { snprintf(buf, sizeof(buf), "%02X ", v); hex += buf; }
+#       ESP_LOGW("dm_bind", "FF01 NOTIFY (%u B): %s", (unsigned) x.size(), hex.c_str());
 
-      // Reading 8|6|6: the first 8 bytes are the only variable field and
-      // exactly key sized - that is the candidate.
-      if (x.size() >= 8) {
-        std::string k;
-        for (size_t i = 0; i < 8; i++) {
-          snprintf(buf, sizeof(buf), "%02X ", x[i]);
-          k += buf;
-        }
-        ESP_LOGW("dm_bind", "  KEY CANDIDATE (bytes 0-7): %s", k.c_str());
-      }
-      if (x.size() >= 20) {
-        ESP_LOGW("dm_bind", "  middle (8-13, expect 00 01 03 01 00 03): "
-                 "%02X %02X %02X %02X %02X %02X",
-                 x[8], x[9], x[10], x[11], x[12], x[13]);
-      }
+#       // Reading 8|6|6: the first 8 bytes are the only variable field and
+#       // exactly key sized - that is the candidate.
+#       if (x.size() >= 8) {
+#         std::string k;
+#         for (size_t i = 0; i < 8; i++) {
+#           snprintf(buf, sizeof(buf), "%02X ", x[i]);
+#           k += buf;
+#         }
+#         ESP_LOGW("dm_bind", "  KEY CANDIDATE (bytes 0-7): %s", k.c_str());
+#       }
+#       if (x.size() >= 20) {
+#         ESP_LOGW("dm_bind", "  middle (8-13, expect 00 01 03 01 00 03): "
+#                  "%02X %02X %02X %02X %02X %02X",
+#                  x[8], x[9], x[10], x[11], x[12], x[13]);
+#       }
 
-      // NO echo any more. Echoing FF01 back to FF02 was tried and does NOT
-      // bind the remote (it kept sending idle heartbeats only). Since it
-      // achieves nothing, writing to a freshly bound remote is pure risk - it
-      // might disturb a bond that was just established with the original fan.
-      // This config is now READ-ONLY.
-      return NAN;
+#       // NO echo any more. Echoing FF01 back to FF02 was tried and does NOT
+#       // bind the remote (it kept sending idle heartbeats only). Since it
+#       // achieves nothing, writing to a freshly bound remote is pure risk - it
+#       // might disturb a bond that was just established with the original fan.
+#       // This config is now READ-ONLY.
+#       return NAN;
 
 # Fan - only so the MCU stays happy (UART keepalive).
 # ble_remote stays off: the beacon logging is done by the lambda above, and
