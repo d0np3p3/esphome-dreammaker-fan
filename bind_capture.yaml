@@ -19,33 +19,37 @@
 #   then they ARE the key. A wrong key passes the checksum with probability
 #   1/256 per payload - a handful of button presses settles it.
 #
-# PASSIVE CAPTURE ONLY. No GATT connection, no writes.
+# WHAT WENT WRONG LAST TIME - and what changed
+#   The previous run POLLED FF01 every 60s and echoed whatever static value came
+#   back. Those echoes almost never landed inside the remote's ~15s pairing
+#   window, so nothing was ever bound. Doing the same handshake by hand in nRF
+#   Connect DID work back then: the flashing stopped and FF01 then read a
+#   different value.
 #
-#   Holding a GATT connection makes the remote STOP ADVERTISING, so beacons and
-#   FF01 reads cannot happen at the same time. FF01 has already been read and is
-#   stable, so only the beacons are still missing.
+#   Two changes to reproduce that:
+#     - update_interval: never  -> no polling; the lambda fires ONLY on a real
+#       notification, i.e. exactly when the remote pushes its challenge
+#     - echo only when the value CHANGED -> the static idle value is not a
+#       challenge and echoing it achieves nothing
 #
-# PROCEDURE - no NVS dump needed
-#   The remote only emits command beacons while bound to something, so bind it
-#   to a fan running ORIGINAL firmware first.
+# PROCEDURE
+#   1. Flash this config and open the log
+#   2. Wait for: [W][dm_bind] CONNECTED - now press Power+M on the remote
+#   3. Press Power + M on the remote (8 LEDs flash)
+#   4. Watch for:
+#        [W][dm_bind] FF01 NOTIFY (20 B): <NEW value, not FC 55 40 ...>
+#        [W][dm_bind]   >>> VALUE CHANGED - this looks like the pairing challenge
+#        [W][dm_bind]   Echo #1 sent to FF02 - watch the remote LEDs
+#   5. Do the LEDs stop flashing? That is the signal that the bind was accepted.
+#   6. Send the log.
 #
-#   1. Pair the remote with the original-firmware fan the normal way:
-#        Fan: Head-shaking + Timer  -> 4 LEDs flash
-#        Remote: Power + M          -> 8 LEDs flash
-#        Press any key on the fan   -> confirmation tone
-#   2. Flash this config on the ESPHome fan
-#   3. Press buttons on the remote - Power, M, oscillation, timer, several
-#      times each. Expected:
-#        [W][dm_beacon] 84:0A:.. CMD st=02 ctr=03 payload= 92 43 A0 3F ...
-#   4. Send those CMD lines.
+# NOTE: while connected the remote stops advertising, so NO beacons arrive
+#   during this run. That is expected - this run is about the challenge. To
+#   capture beacons afterwards, comment out the ble_client and sensor again.
 #
-# THE TEST
-#   Does FC 55 40 41 68 7C 7F 5F (FF01 of this remote, read while unpaired)
-#   decrypt those payloads with a valid checksum?
-#     yes -> the key can simply be read over GATT, no NVS dump ever needed
-#     no  -> the key is generated during pairing; NVS stays the only route
-#   If it fails, re-enable the ble_client block below to re-read FF01 in the
-#   now-bound state and test that value too.
+# KNOWN VALUES
+#   remote 84:0A:10:78:19:33, unpaired, polled: FC 55 40 41 68 7C 7F 5F
+#   A challenge should look DIFFERENT from that.
 #
 # IF THE CONNECTION FAILS ("Cannot poll, not connected")
 #   1. Check the MAC in the IDLE lines. After Power+M the remote may advertise
@@ -178,77 +182,107 @@ esp32_ble_tracker:
             }
           }
 
-# GATT client - DISABLED ON PURPOSE.
-#
-# While the ESP holds a GATT connection the remote STOPS ADVERTISING, so no
-# beacons arrive at all - not even idle ones. Reading FF01 and capturing
-# beacons are therefore mutually exclusive; you cannot do both at once.
-#
-# FF01 has already been read and is stable across 16 polls over many minutes:
-#   remote 84:0A:10:78:19:33 -> FC 55 40 41 68 7C 7F 5F
-# so there is nothing left to read. Beacon capture is what matters now.
-#
-# Re-enable this block (and the sensor below) only if FF01 needs re-reading,
-# e.g. to check whether the value changed after a successful bind.
-#
-# ble_client:
-#   - mac_address: ${remote_mac}
-#     id: dm_remote
-#     on_connect:
-#       - lambda: 'ESP_LOGW("dm_bind", "CONNECTED - waiting for FF01 NOTIFY");'
-#     on_disconnect:
-#       - lambda: 'ESP_LOGW("dm_bind", "disconnected");'
+# GATT client. NOTE: while connected the remote stops advertising, so no
+# beacons arrive during this phase. That is expected here - this run is about
+# catching the pairing challenge, not the beacons.
+ble_client:
+  - mac_address: ${remote_mac}
+    id: dm_remote
+    on_connect:
+      - lambda: 'ESP_LOGW("dm_bind", "CONNECTED - now press Power+M on the remote");'
+    on_disconnect:
+      - lambda: 'ESP_LOGW("dm_bind", "disconnected");'
 
 globals:
   - id: last_beacon_ctr
     type: int
     restore_value: no
     initial_value: '-1'
+  - id: ff01_payload
+    type: std::vector<uint8_t>
+    restore_value: no
+  - id: ff01_last
+    type: std::vector<uint8_t>
+    restore_value: no
+  - id: echo_count
+    type: int
+    restore_value: no
+    initial_value: '0'
 
-# FF01 reader - disabled together with the ble_client above.
-#
-# # Read FF01. The sensor platform is the way to get at the RAW notify bytes -
-# # the return value is irrelevant, only the lambda matters.
-# sensor:
-#   - platform: ble_client
-#     ble_client_id: dm_remote
-#     id: ff01_notify
-#     name: "FF01 raw"
-#     internal: true
-#     type: characteristic
-#     service_uuid: '00FF'
-#     characteristic_uuid: 'FF01'
-#     # notify: true is REQUIRED - without it the lambda never fires
-#     # (esphome/esphome#12386).
-#     notify: true
-#     lambda: |-
-#       char buf[8];
-#       std::string hex;
-#       for (auto v : x) { snprintf(buf, sizeof(buf), "%02X ", v); hex += buf; }
-#       ESP_LOGW("dm_bind", "FF01 NOTIFY (%u B): %s", (unsigned) x.size(), hex.c_str());
+# Echo to FF02, as a script because an action cannot be called directly from
+# inside the sensor lambda.
+script:
+  - id: echo_script
+    mode: single
+    then:
+      - ble_client.ble_write:
+          id: dm_remote
+          service_uuid: '00FF'
+          characteristic_uuid: 'FF02'
+          value: !lambda 'return id(ff01_payload);'
+      - lambda: |-
+          id(echo_count) += 1;
+          ESP_LOGW("dm_bind", "  Echo #%d sent to FF02 - watch the remote LEDs",
+                   id(echo_count));
 
-#       // Reading 8|6|6: the first 8 bytes are the only variable field and
-#       // exactly key sized - that is the candidate.
-#       if (x.size() >= 8) {
-#         std::string k;
-#         for (size_t i = 0; i < 8; i++) {
-#           snprintf(buf, sizeof(buf), "%02X ", x[i]);
-#           k += buf;
-#         }
-#         ESP_LOGW("dm_bind", "  KEY CANDIDATE (bytes 0-7): %s", k.c_str());
-#       }
-#       if (x.size() >= 20) {
-#         ESP_LOGW("dm_bind", "  middle (8-13, expect 00 01 03 01 00 03): "
-#                  "%02X %02X %02X %02X %02X %02X",
-#                  x[8], x[9], x[10], x[11], x[12], x[13]);
-#       }
+# Read FF01. The sensor platform is the way to get at the RAW notify bytes -
+# the return value is irrelevant, only the lambda matters.
+sensor:
+  - platform: ble_client
+    ble_client_id: dm_remote
+    id: ff01_notify
+    name: "FF01 raw"
+    internal: true
+    type: characteristic
+    service_uuid: '00FF'
+    characteristic_uuid: 'FF01'
+    # notify: true is REQUIRED - without it the lambda never fires
+    # (esphome/esphome#12386).
+    notify: true
+    # NO POLLING. The previous run polled FF01 every 60s and echoed whatever
+    # static value came back - which almost never landed inside the remote's
+    # ~15s pairing window, so the bind never happened. With polling off, the
+    # lambda fires ONLY on a real notification, i.e. exactly when the remote
+    # pushes its pairing challenge after Power+M. That is what nRF Connect does
+    # by hand, and there it worked (the flashing stopped).
+    update_interval: never
+    lambda: |-
+      char buf[8];
+      std::string hex;
+      for (auto v : x) { snprintf(buf, sizeof(buf), "%02X ", v); hex += buf; }
+      ESP_LOGW("dm_bind", "FF01 NOTIFY (%u B): %s", (unsigned) x.size(), hex.c_str());
 
-#       // NO echo any more. Echoing FF01 back to FF02 was tried and does NOT
-#       // bind the remote (it kept sending idle heartbeats only). Since it
-#       // achieves nothing, writing to a freshly bound remote is pure risk - it
-#       // might disturb a bond that was just established with the original fan.
-#       // This config is now READ-ONLY.
-#       return NAN;
+      // Reading 8|6|6: the first 8 bytes are the only variable field and
+      // exactly key sized - that is the candidate.
+      if (x.size() >= 8) {
+        std::string k;
+        for (size_t i = 0; i < 8; i++) {
+          snprintf(buf, sizeof(buf), "%02X ", x[i]);
+          k += buf;
+        }
+        ESP_LOGW("dm_bind", "  KEY CANDIDATE (bytes 0-7): %s", k.c_str());
+      }
+      if (x.size() >= 20) {
+        ESP_LOGW("dm_bind", "  middle (8-13, expect 00 01 03 01 00 03): "
+                 "%02X %02X %02X %02X %02X %02X",
+                 x[8], x[9], x[10], x[11], x[12], x[13]);
+      }
+
+      // Echo back ONLY when the value actually changed. The static value that
+      // sits in FF01 outside of pairing is not a challenge, and echoing it
+      // repeatedly is what the previous attempt did - to no effect. A CHANGED
+      // value arriving as a real notification is the pairing challenge, and it
+      // must be answered immediately, inside the remote's ~15s window.
+      if (x != id(ff01_last)) {
+        id(ff01_last) = x;
+        ESP_LOGW("dm_bind", "  >>> VALUE CHANGED - this looks like the pairing "
+                            "challenge, echoing now");
+        id(ff01_payload) = x;
+        id(echo_script).execute();
+      } else {
+        ESP_LOGW("dm_bind", "  (unchanged - not a challenge, no echo sent)");
+      }
+      return NAN;
 
 # Fan - only so the MCU stays happy (UART keepalive).
 # ble_remote stays off: the beacon logging is done by the lambda above, and
