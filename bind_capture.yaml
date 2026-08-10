@@ -180,8 +180,11 @@ sensor:
     id: ff01_notify
     name: "FF01 raw"
     internal: true
+    type: characteristic
     service_uuid: '00FF'
     characteristic_uuid: 'FF01'
+    # notify: true is REQUIRED - without it the lambda never fires
+    # (esphome/esphome#12386).
     notify: true
     lambda: |-
       char buf[8];
@@ -241,11 +244,9 @@ fan:
       name: "Luftfeuchtigkeit"
       entity_category: diagnostic
 
-binary_sensor:
-  - platform: ble_client
-    ble_client_id: dm_remote
-    name: "Remote connected"
-    entity_category: diagnostic
+# No binary_sensor here: 'binary_sensor.ble_client' does not exist in ESPHome
+# 2026.7.x. The connection state is visible in the log via on_connect /
+# on_disconnect anyway, which is all this test needs.
 
 text_sensor:
   - platform: version
