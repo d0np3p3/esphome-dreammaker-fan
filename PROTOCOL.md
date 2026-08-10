@@ -574,8 +574,34 @@ FF01, then dump NVS and compare `ble_key` against the leading 8 bytes. If they
 match, ESPHome can learn the key during its own bind and no NVS dump is ever
 needed — which removes the main obstacle for other users.
 
-> ⚠️ Unverified. The two captured messages are from a different pairing session
-> than the NVS dump we have, so they cannot be correlated directly.
+### Structure CONFIRMED on a second remote (2026-08-10)
+
+A second, previously unpaired remote (`84:0A:10:78:19:33`) was connected with
+ESPHome acting as GATT client. Its FF01 value:
+
+```
+                  [0..7]  8 bytes          [8..13] 6 bytes    [14..19] 6 bytes
+remote #2  FC 55 40 41 68 7C 7F 5F   |   00 01 03 01 00 03   |   FC 55 40 41 68 7C
+```
+
+The middle six bytes are **byte-identical** to both messages captured from
+remote #1, and the tail again repeats bytes `[0..5]`. So the `8|6|6` grouping is
+confirmed across two independent devices, and those six constant bytes are
+protocol metadata rather than anything device-specific.
+
+Also confirmed by this run: **ESPHome can connect to the remote as a GATT
+client** (service discovery completes, notify registration on FF01 succeeds, and
+writes to FF02 are accepted). The earlier "Cannot poll, not connected" was only
+a wrong MAC in the config — every remote has its own address.
+
+Note the FF01 value repeated unchanged 60 s later, i.e. it is a stable
+characteristic value rather than a per-connection random challenge. That fits
+the older capture, where the value differed *before* and *after* a successful
+bind.
+
+> ⚠️ The leading 8 bytes being the DES key is still **unverified**: it needs a
+> run where command beacons (`status=0x02`) arrive after the bind, so the
+> candidate can be tested against them.
 
 ### Where the key does NOT come from
 
