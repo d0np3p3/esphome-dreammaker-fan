@@ -1,0 +1,257 @@
+# DM Fan — Bind-Experiment: kann ESPHome den Schlüssel selbst lernen?
+# ──────────────────────────────────────────────────────────────────────────────
+# FRAGE
+#   Sind die ersten 8 Byte der GATT-Bind-Nachricht (FF01) der DES-Schlüssel?
+#   Falls ja, kann ESPHome sich selbst mit der Fernbedienung koppeln und den
+#   Schlüssel dabei lernen — dann braucht niemand mehr einen NVS-Dump, und das
+#   Feature wird für alle nutzbar statt nur für Leute mit gesichertem Backup.
+#
+# WARUM DAS HIER SELBSTPRÜFEND IST
+#   Wir brauchen keinen Referenzschlüssel aus dem NVS. Der Beweis liegt in den
+#   Daten selbst: wenn die 8 Byte aus FF01 die anschließenden Beacons so
+#   entschlüsseln, dass die Prüfsumme stimmt (byte[7] == sum(byte[0..6]) & 0xFF),
+#   dann IST es der Schlüssel. Bei einem falschen Schlüssel wäre das ein
+#   1:256-Zufall pro Payload — bei mehreren Tastendrücken praktisch unmöglich.
+#
+# VORAUSSETZUNG
+#   Eine UNGEPAARTE Fernbedienung. Ein bestehender Bond würde beim Pairing
+#   gelöscht — mit einer ungepaarten gibt es nichts zu verlieren.
+#
+# ABLAUF
+#   1. Diese Config flashen, Log öffnen (Level ist bereits DEBUG)
+#   2. Fernbedienung: Power + M gleichzeitig  → 8 LEDs blinken
+#   3. Der ESP verbindet sich von selbst, sobald er die Remote sieht.
+#      Erwartet im Log:
+#        [W][dm_bind] ✓ VERBUNDEN mit der Fernbedienung
+#        [W][dm_bind] FF01 NOTIFY (20 B): 29 B0 C3 6E ...
+#        [W][dm_bind]   → SCHLÜSSELKANDIDAT (Byte 0-7): 29 B0 C3 6E 91 97 B4 71
+#        [W][dm_bind] → Echo an FF02 gesendet
+#      Das Blinken sollte aufhören.
+#   4. Jetzt Tasten drücken — Power, M, ∿, 🕐, je mehrfach.
+#      Erwartet:
+#        [W][dm_beacon] CMD ctr=03 payload= 92 43 A0 3F A6 59 2F AA
+#
+#   5. BEIDE Blöcke schicken: die FF01-Zeilen UND die CMD-Zeilen.
+#      Die Entschlüsselung prüfe ich offline.
+#
+# WORAUF ES ANKOMMT
+#   Kommen nach dem Bind überhaupt `CMD`-Zeilen (status=0x02)?
+#   Eine UNGEBUNDENE Fernbedienung sendet nur Idle-Heartbeats (status=0x01).
+#   Erscheinen also Kommando-Beacons, hat der ESP-Bind bereits funktioniert —
+#   unabhängig davon, ob der Schlüssel stimmt.
+#
+# ⚠️ Unbestätigt: Im Handbuch-Ablauf bestätigt man das Pairing durch einen
+#    Tastendruck AM FAN. Diesen Gegenpart gibt es hier nicht. Möglicherweise
+#    verwirft die Fernbedienung den Bind nach 15 s wieder. Genau das beantwortet
+#    der Test mit.
+#
+# ⚠️ Der dm_fan-Teil MUSS drinbleiben: ohne WiFi-Keepalive über UART setzt die
+#    MCU den ESP nach ~4 Minuten zurück.
+# ──────────────────────────────────────────────────────────────────────────────
+
+substitutions:
+  device_name: dreammaker-fan
+  friendly_name: "Dream Maker Fan"
+  # MAC der Fernbedienung. Bei einer ANDEREN Remote hier anpassen —
+  # im Log erscheint sie als "DM remote beacon <MAC>".
+  remote_mac: "4B:F2:7E:47:E5:6E"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly_name}
+  comment: "Bind-Experiment — TEMPORÄR"
+  min_version: "2026.4.5"
+  project:
+    name: "d0np3p3.dreammaker-fan"
+    version: "4.0.0-beta-bind"
+  on_boot:
+    priority: -100
+    then:
+      - logger.log:
+          level: WARN
+          format: "══ BIND-TEST — jetzt Power+M an der Fernbedienung drücken ══"
+
+esp32:
+  board: esp32dev
+  framework:
+    type: esp-idf
+    advanced:
+      sram1_as_iram: true
+
+logger:
+  level: DEBUG
+  logs:
+    dm_bind: INFO       # die FF01-Zeilen (als WARN ausgegeben)
+    dm_beacon: INFO     # die Beacon-Zeilen
+    ble_client: INFO    # Verbindungsauf-/abbau
+    esp32_ble_tracker: INFO
+
+api:
+  encryption:
+    key: !secret api_encryption_key
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  ap:
+    ssid: "${device_name} Fallback"
+    password: !secret wifi_ap_password
+
+captive_portal:
+
+external_components:
+  - source:
+      type: git
+      url: https://github.com/d0np3p3/esphome-dreammaker-fan
+      ref: v4.0.0-beta
+    refresh: 0s
+    components: [dm_fan]
+
+uart:
+  id: uart_bus
+  tx_pin: GPIO17
+  rx_pin: GPIO16
+  baud_rate: 19200
+
+# ── BLE-Scanner ──────────────────────────────────────────────────────────────
+# Hohe Duty-Cycle-Werte: im Pairing-Fenster advertised die Remote schnell, und
+# wir dürfen den Moment nicht verpassen. Stört das WLAN — nur für den Test.
+esp32_ble_tracker:
+  scan_parameters:
+    active: true       # true: wir wollen verbinden, nicht nur lauschen
+    interval: 320ms
+    window: 300ms
+  on_ble_advertise:
+    then:
+      - lambda: |-
+          for (const auto &d : x.get_manufacturer_datas()) {
+            if (!(d.uuid == esp32_ble_tracker::ESPBTUUID::from_uint16(0x4D44)))
+              continue;
+            if (d.data.size() < 18) continue;
+            const uint8_t ctr = d.data[8];
+            const uint8_t st  = d.data[9];
+            char buf[8];
+            std::string pl;
+            for (size_t i = 10; i < 18; i++) {
+              snprintf(buf, sizeof(buf), "%02X ", d.data[i]);
+              pl += buf;
+            }
+            if (st == 0x01) {
+              // Idle-Heartbeat — auf DEBUG, sonst flutet es das Log.
+              ESP_LOGD("dm_beacon", "%s idle ctr=%02X",
+                       x.address_str().c_str(), ctr);
+            } else if (ctr != id(last_beacon_ctr)) {
+              id(last_beacon_ctr) = ctr;
+              ESP_LOGW("dm_beacon", "CMD st=%02X ctr=%02X payload= %s",
+                       st, ctr, pl.c_str());
+            }
+          }
+
+# ── GATT-Client: verbindet sich mit der Fernbedienung ────────────────────────
+ble_client:
+  - mac_address: ${remote_mac}
+    id: dm_remote
+    on_connect:
+      - lambda: 'ESP_LOGW("dm_bind", "✓ VERBUNDEN — warte auf FF01 NOTIFY");'
+    on_disconnect:
+      - lambda: 'ESP_LOGW("dm_bind", "✗ Verbindung getrennt");'
+
+globals:
+  - id: last_beacon_ctr
+    type: int
+    restore_value: no
+    initial_value: '-1'
+  - id: ff01_payload
+    type: std::vector<uint8_t>
+    restore_value: no
+  - id: echo_count
+    type: int
+    restore_value: no
+    initial_value: '0'
+
+# ── FF01 mitlesen ────────────────────────────────────────────────────────────
+# Die Sensor-Plattform ist der Weg, an die ROHEN Notify-Bytes zu kommen —
+# der Rückgabewert interessiert nicht, nur das Lambda.
+sensor:
+  - platform: ble_client
+    ble_client_id: dm_remote
+    id: ff01_notify
+    name: "FF01 (intern)"
+    internal: true
+    service_uuid: '00FF'
+    characteristic_uuid: 'FF01'
+    notify: true
+    lambda: |-
+      char buf[8];
+      std::string hex;
+      for (auto v : x) { snprintf(buf, sizeof(buf), "%02X ", v); hex += buf; }
+      ESP_LOGW("dm_bind", "FF01 NOTIFY (%u B): %s", (unsigned) x.size(), hex.c_str());
+
+      // Lesart 8|6|6: die ersten 8 Byte sind das einzige variable Feld und
+      // exakt schlüsselgroß — das ist der Kandidat.
+      if (x.size() >= 8) {
+        std::string k;
+        for (size_t i = 0; i < 8; i++) {
+          snprintf(buf, sizeof(buf), "%02X ", x[i]);
+          k += buf;
+        }
+        ESP_LOGW("dm_bind", "  → SCHLÜSSELKANDIDAT (Byte 0-7): %s", k.c_str());
+      }
+      if (x.size() >= 20) {
+        ESP_LOGW("dm_bind", "  → Mitte (8-13, sollte konstant 00 01 03 01 00 03 sein): "
+                 "%02X %02X %02X %02X %02X %02X",
+                 x[8], x[9], x[10], x[11], x[12], x[13]);
+      }
+
+      // Challenge unverändert zurückschicken — das ist der bekannte Handshake.
+      id(ff01_payload) = x;
+      id(echo_script).execute();
+      return NAN;
+
+# Echo an FF02. Als Script, weil eine Action nicht direkt aus dem Sensor-Lambda
+# heraus aufgerufen werden kann.
+script:
+  - id: echo_script
+    mode: single
+    then:
+      - ble_client.ble_write:
+          id: dm_remote
+          service_uuid: '00FF'
+          characteristic_uuid: 'FF02'
+          value: !lambda 'return id(ff01_payload);'
+      - lambda: |-
+          id(echo_count) += 1;
+          ESP_LOGW("dm_bind", "→ Echo #%d an FF02 gesendet — Blinken sollte "
+                              "jetzt aufhören", id(echo_count));
+
+# ── Fan: nur damit die MCU zufrieden ist ─────────────────────────────────────
+# ble_remote bleibt AUS — das Beacon-Logging macht die Lambda oben, und ohne
+# ble_key könnte dm_fan ohnehin nichts entschlüsseln.
+fan:
+  - platform: dm_fan
+    id: my_fan
+    name: "DM Fan"
+    uart_id: uart_bus
+    temperature:
+      name: "Temperatur"
+      entity_category: diagnostic
+    humidity:
+      name: "Luftfeuchtigkeit"
+      entity_category: diagnostic
+
+# ── Diagnose ─────────────────────────────────────────────────────────────────
+binary_sensor:
+  - platform: ble_client
+    ble_client_id: dm_remote
+    name: "Fernbedienung verbunden"
+    entity_category: diagnostic
+
+text_sensor:
+  - platform: version
+    name: "ESPHome Version"
+    icon: "mdi:package-up"
+    entity_category: diagnostic
