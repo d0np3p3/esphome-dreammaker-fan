@@ -52,43 +52,46 @@ Schlüssel gibt.
 
 ---
 
-## 🔵 Offen: der Schlüssel für andere Nutzer
+## ❌ Abgeschlossen: der Schlüssel — NVS-Dump bleibt zwingend
 
-Das ist die einzige echte Hürde für eine breitere Nutzung.
+**Ergebnis vom 2026-08-10: die Hypothese ist widerlegt.**
 
-**Vielversprechende Spur (unbestätigt):** Die ersten **8 Byte** der
-GATT-Bind-Nachricht (FF01) sind genau schlüsselgroß, und die Neu-Gruppierung
-`8|6|6` zeigt sie als einziges variables Feld (siehe PROTOCOL.md). Wäre das der
-Schlüssel, könnte ESPHome ihn beim eigenen Bind lernen — kein NVS-Dump mehr nötig.
+Remote `84:0A:10:78:19:33` wurde an einen Original-FW-Fan gekoppelt und ihre
+Kommando-Beacons mitgeschnitten (19 Payloads, 18 verschiedene). Dagegen getestet
+wurde alles, was sich aus den GATT-Daten ableiten lässt:
 
-**Stand 2026-08-10 nach dem Hardware-Test:**
+- alle 13 Acht-Byte-Fenster der 20-Byte-FF01-Nachricht
+- FF01 rückwärts, gekürzt, nullgepolstert
+- die Remote-MAC, rückwärts und beidseitig nullgepolstert
+- MD5/SHA1/SHA256 über FF01, FF01[0:8] und die MAC
+- der bekannte `ble_key` der anderen Remote als Kontrolle
 
-- [x] Struktur `8|6|6` auf **zweiter, unabhängiger Fernbedienung** bestätigt —
-      die mittleren 6 Byte sind byte-identisch über beide Geräte
-- [x] ESPHome kann sich als GATT-Client verbinden (Service Discovery, Notify,
-      Write auf FF02 — alles akzeptiert)
-- [x] **FF01 ist OHNE jede Bindung lesbar** — der entscheidende Fund
-- [ ] ~~Bind per Echo~~ — funktioniert NICHT. Nach dem Echo bleibt die
-      Fernbedienung ungebunden, es kommen weiterhin nur Idle-Heartbeats.
-      Vermutlich fehlt das Gegenstück zu Schritt 3 des Handbuchs
-      („Taste am Fan drücken"), das es bei ESPHome als Partner nicht gibt.
+**Bester Treffer: 1 von 19 Prüfsummen — exakt Zufallsniveau.** Zum Vergleich:
+der richtige Schlüssel erreichte beim früheren Capture 18/18.
 
-**Nächster Test — jetzt gut definiert, weil der Vor-Bind-Wert vorliegt:**
+**Der Schlüssel entsteht beim Pairing und liegt ausschließlich im NVS des Fans.**
+Nicht ableitbar aus der Remote, nicht aus ihrer Adresse, nicht aus der Cloud
+(alles einzeln geprüft). Auslesen geht nur an einem Fan mit Original-Firmware.
 
-Remote `84:0A:10:78:19:33` hat ungebunden `FC 55 40 41 68 7C 7F 5F` in FF01.
+### Was das für das Feature bedeutet
 
-- [ ] Diese Remote ganz normal an einen Original-FW-Fan koppeln
-- [ ] NVS dieses Fans dumpen
-- [ ] `ble_key` gegen `FC 55 40 41 68 7C 7F 5F` vergleichen
+Die NVS-Voraussetzung ist real und mit dem heutigen Wissensstand unumgehbar.
+Damit bleibt die Aufteilung wie sie ist: `main` ohne Fernbedienung,
+`v4.0.0-beta` mit — und die Doku muss deutlich sagen, dass **vor** dem Flashen
+gesichert werden muss.
 
-Bei Treffer braucht es **gar keinen Bind**: einmal verbinden, FF01 lesen,
-Schlüssel da. Das würde die NVS-Dump-Voraussetzung komplett beseitigen und das
-Feature reif für `main` machen. Kein Treffer heißt: der Schlüssel entsteht beim
-Pairing — auch das wäre eine klare Antwort statt einer Vermutung.
+### Nebenbefunde aus der Testreihe
 
-**Ausgeschlossen:** nicht aus der Cloud (Pairing-Mitschnitt zeigt keinen
-Austausch), nicht ableitbar aus MAC/product_id/device_id/device_key
-(mehrere hundert Ableitungen getestet).
+- ESPHome kann sich als GATT-Client mit der Remote verbinden (Service Discovery,
+  Notify-Registrierung, Writes — alles akzeptiert)
+- **FF01 notifiziert nie.** Die Registrierung gelingt, gepusht wird nichts —
+  auch nicht bei Power+M. Alle je gesehenen Werte kamen vom Polling.
+- **Ein ESPHome-seitiger Bind ist nicht möglich.** Echo auf FF02 (16× getestet)
+  bindet nicht; im Handbuch wird das Pairing durch einen Tastendruck **am Fan**
+  abgeschlossen, wofür es hier kein Gegenstück gibt.
+- **Verbunden = kein Advertising.** Solange der ESP eine GATT-Verbindung hält,
+  sendet die Remote keine Beacons. Lesen und Mitschneiden schließen sich aus.
+- Struktur `8|6|6` der FF01-Nachricht auf zwei unabhängigen Geräten bestätigt
 
 ---
 

@@ -625,7 +625,31 @@ The likely reason is the manual's step 3: the original flow is completed by
 **pressing a key on the fan**, and there is no equivalent when ESPHome is the
 peer. The plain echo is evidently a handshake step, not the bind itself.
 
-### But FF01 is readable WITHOUT any pairing - and that may be the shortcut
+### ❌ SETTLED: FF01 is NOT the key (2026-08-10)
+
+Remote `84:0A:10:78:19:33` was paired with an original-firmware fan and its
+command beacons captured — 19 payloads, 18 distinct. Every candidate derivable
+from the GATT data was tested against them:
+
+- all thirteen 8-byte windows of the 20-byte FF01 message
+- FF01 reversed, and truncated/zero-padded variants
+- the remote's MAC, reversed and zero-padded both ways
+- MD5 / SHA1 / SHA256 of FF01, of FF01[0:8], and of the MAC
+- the known `ble_key` of the *other* remote, as a control
+
+**Best result: 1 of 19 checksums — exactly random expectation** (1/256 per
+payload over 19 payloads ≈ 0.07 expected hits; one hit is unremarkable). By
+comparison, the correct key scored 18/18 on the earlier capture.
+
+**Conclusion: the DES key is generated during pairing and exists only in the
+fan's NVS.** It is not derivable from anything the remote exposes over GATT, not
+from its address, and not from the cloud. Reading it requires a fan still
+running original firmware.
+
+This closes the question that gated moving the feature to `main`. The NVS-dump
+prerequisite is real and unavoidable with everything known so far.
+
+### FF01 is readable without pairing - but it is not the key
 
 The decisive observation from this run: ESPHome connected to a completely
 unpaired remote and read FF01 with **no authentication and no bond**. If those
