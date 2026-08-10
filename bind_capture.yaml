@@ -1,4 +1,4 @@
-# DM Fan - Bind experiment: can ESPHome learn the key by itself?
+# DM Fan - Is FF01[0..7] the DES key? (read-only capture)
 # ---------------------------------------------------------------------------
 # NOTE: this file is deliberately pure ASCII. Box-drawing characters and
 # arrows got mangled to invalid control bytes when the file was transferred
@@ -6,10 +6,12 @@
 # Keep it ASCII-only when editing.
 #
 # QUESTION
-#   Are the first 8 bytes of the GATT bind message (FF01) the DES key?
-#   If so, ESPHome can pair with the remote itself and learn the key, and
-#   nobody needs an NVS dump any more - the feature becomes usable for
-#   everyone instead of only for people who took a backup before flashing.
+#   Are the first 8 bytes of FF01 the DES key?
+#   FF01 turned out to be readable over GATT from a completely unpaired remote,
+#   with no authentication and no bond. So if those bytes are the key, a device
+#   can simply connect once and read it - no NVS dump, no pairing window. That
+#   would make the feature usable for everyone instead of only for people who
+#   took a backup before flashing.
 #
 # WHY THIS IS SELF-VERIFYING
 #   No reference key is needed. If those 8 bytes decrypt the following
@@ -17,30 +19,34 @@
 #   then they ARE the key. A wrong key passes the checksum with probability
 #   1/256 per payload - a handful of button presses settles it.
 #
-# PREREQUISITE
-#   An UNPAIRED remote. Pairing would erase an existing bond; with an
-#   unpaired one there is nothing to lose.
+# READ-ONLY. This config only reads FF01 and logs beacons. It does not write
+# anything to the remote.
 #
-# PROCEDURE
-#   1. Flash this config, open the log (level is already DEBUG)
-#   2. Remote: press Power + M together  -> 8 LEDs flash
-#   3. The ESP connects on its own as soon as it sees the remote.
-#      Expected in the log:
-#        [W][dm_bind] CONNECTED - waiting for FF01 NOTIFY
-#        [W][dm_bind] FF01 NOTIFY (20 B): 29 B0 C3 6E ...
-#        [W][dm_bind]   KEY CANDIDATE (bytes 0-7): 29 B0 C3 6E 91 97 B4 71
-#        [W][dm_bind]   Echo #1 sent to FF02
-#      The flashing should stop.
-#   4. Now press buttons - Power, M, oscillation, timer, several times each.
-#      Expected:
+# PROCEDURE - no NVS dump needed
+#   The remote only emits command beacons while it is bound to something. So
+#   bind it to a fan running ORIGINAL firmware, then read FF01 and capture the
+#   beacons with this config. Both halves of the test then exist and can be
+#   checked against each other offline.
+#
+#   1. Power the ESPHome fan OFF (so its GATT client cannot grab the remote's
+#      connection during the pairing window)
+#   2. Pair the remote with the original-firmware fan the normal way:
+#        Fan: Head-shaking + Timer  -> 4 LEDs flash
+#        Remote: Power + M          -> 8 LEDs flash
+#        Press any key on the fan   -> confirmation tone
+#   3. Power the ESPHome fan back ON with this config
+#   4. Press buttons on the remote - Power, M, oscillation, timer, several
+#      times each. Expected:
 #        [W][dm_beacon] CMD st=02 ctr=03 payload= 92 43 A0 3F A6 59 2F AA
-#   5. Send BOTH blocks: the FF01 lines AND the CMD lines.
+#        [W][dm_bind]   KEY CANDIDATE (bytes 0-7): ...
+#   5. Send BOTH blocks.
 #
-# WHAT MATTERS MOST
-#   Do CMD lines (status=0x02) appear at all after the bind?
-#   An UNBOUND remote only sends idle heartbeats (status=0x01). So if command
-#   beacons show up, the ESP-side bind already worked - independently of
-#   whether the key guess is right.
+# THE TEST
+#   Does FF01[0..7] decrypt those payloads with a valid checksum? The pre-bind
+#   value of remote 84:0A:10:78:19:33 is already on record:
+#     FC 55 40 41 68 7C 7F 5F
+#   If FF01 now reads DIFFERENTLY, both values get tested - the older capture
+#   showed the value changing across a successful bind.
 #
 # IF THE CONNECTION FAILS ("Cannot poll, not connected")
 #   1. Check the MAC in the IDLE lines. After Power+M the remote may advertise
@@ -53,9 +59,10 @@
 #   3. If NO beacon lines appear at all, the remote is not advertising - press
 #      Power+M again, or replace its battery.
 #
-# UNCONFIRMED: the manual's flow confirms pairing with a button press ON THE
-#   FAN. There is no such counterpart here, so the remote may drop the bind
-#   after 15 s. This test answers that too.
+# WHY NOT LET ESPHOME BIND: tried and it does not work. Echoing FF01 back to
+#   FF02 leaves the remote unbound - it keeps sending idle heartbeats only. The
+#   manual completes pairing with a button press ON THE FAN, and there is no
+#   counterpart to that when ESPHome is the peer.
 #
 # The dm_fan block MUST stay: without the UART WiFi keepalive the MCU resets
 #   the ESP after about 4 minutes.
@@ -67,8 +74,9 @@ substitutions:
   # MAC of the remote. EVERY remote has its own address - read it from the
   # IDLE/CMD lines in the log and put it here, otherwise ble_client waits for a
   # device that is not there ("Cannot poll, not connected").
-  #   4B:F2:7E:47:E5:6E = remote #1 (paired to the original fan)
-  #   84:0A:10:78:19:33 = remote #2 (unpaired) <- used for this experiment
+  #   4B:F2:7E:47:E5:6E = remote #1
+  #   84:0A:10:78:19:33 = remote #2 <- used for this experiment
+  #                       FF01 while unpaired: FC 55 40 41 68 7C 7F 5F
   remote_mac: "84:0A:10:78:19:33"
 
 esphome:
@@ -84,7 +92,7 @@ esphome:
     then:
       - logger.log:
           level: WARN
-          format: "== BIND TEST - now press Power+M on the remote =="
+          format: "== FF01 CAPTURE (read-only) - press remote buttons =="
 
 esp32:
   board: esp32dev
@@ -186,13 +194,6 @@ globals:
     type: int
     restore_value: no
     initial_value: '-1'
-  - id: ff01_payload
-    type: std::vector<uint8_t>
-    restore_value: no
-  - id: echo_count
-    type: int
-    restore_value: no
-    initial_value: '0'
 
 # Read FF01. The sensor platform is the way to get at the RAW notify bytes -
 # the return value is irrelevant, only the lambda matters.
@@ -230,26 +231,12 @@ sensor:
                  x[8], x[9], x[10], x[11], x[12], x[13]);
       }
 
-      // Echo the challenge back unchanged - the known handshake.
-      id(ff01_payload) = x;
-      id(echo_script).execute();
+      // NO echo any more. Echoing FF01 back to FF02 was tried and does NOT
+      // bind the remote (it kept sending idle heartbeats only). Since it
+      // achieves nothing, writing to a freshly bound remote is pure risk - it
+      // might disturb a bond that was just established with the original fan.
+      // This config is now READ-ONLY.
       return NAN;
-
-# Echo to FF02. Done as a script because an action cannot be called directly
-# from inside the sensor lambda.
-script:
-  - id: echo_script
-    mode: single
-    then:
-      - ble_client.ble_write:
-          id: dm_remote
-          service_uuid: '00FF'
-          characteristic_uuid: 'FF02'
-          value: !lambda 'return id(ff01_payload);'
-      - lambda: |-
-          id(echo_count) += 1;
-          ESP_LOGW("dm_bind", "  Echo #%d sent to FF02 - flashing should stop now",
-                   id(echo_count));
 
 # Fan - only so the MCU stays happy (UART keepalive).
 # ble_remote stays off: the beacon logging is done by the lambda above, and
