@@ -1,10 +1,10 @@
-# DM Fan — Fernbedienung steuert den Fan (DES-Entschlüsselung aktiv)
-# ──────────────────────────────────────────────────────────────────────────────
+# DM Fan - Fernbedienung steuert den Fan (DES-Entschlüsselung aktiv)
+# ------------------------------------------------------------------------------
 # Das ist die eigentliche Nutzungskonfiguration: die Fernbedienung sendet ihre
 # Tastendrücke als verschlüsselten BLE-Beacon, dm_fan entschlüsselt sie mit DES
 # und setzt den Fan-Zustand über UART.
 #
-# ⚠️ VORAUSSETZUNG: der `ble_key` aus dem NVS des Fans
+# ! VORAUSSETZUNG: der `ble_key` aus dem NVS des Fans
 #
 #   Der Schlüssel ist GERÄTESPEZIFISCH und steht nur im NVS des Fans, solange
 #   dort noch die Original-Firmware lief. Ohne ihn werden Beacons zwar geloggt,
@@ -22,13 +22,13 @@
 #   Gegenprobe: `ble_model` muss 0x0201 (=513) sein und `ble_mac` die MAC der
 #   Fernbedienung. Steht dort `ble_model=0`, war der Fan nie gepairt.
 #
-# ⚠️ Fernbedienung NICHT neu koppeln (Power+M)! Ein neuer Bond erzeugt einen
+# ! Fernbedienung NICHT neu koppeln (Power+M)! Ein neuer Bond erzeugt einen
 #    neuen Schlüssel und der gesicherte `ble_key` wird ungültig.
 #
-# 🔒 Der Schlüssel gehört in secrets.yaml, nicht hierher:
+#  Der Schlüssel gehört in secrets.yaml, nicht hierher:
 #      # secrets.yaml
 #      dm_ble_key: "00 11 22 33 44 55 66 77"   # <- DEIN Schlüssel, nicht dieser!
-# ──────────────────────────────────────────────────────────────────────────────
+# ------------------------------------------------------------------------------
 
 substitutions:
   device_name: dreammaker-fan
@@ -37,7 +37,7 @@ substitutions:
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
-  comment: "Zeico / Dream Maker Smart Fan — lokal, mit BLE-Fernbedienung"
+  comment: "Zeico / Dream Maker Smart Fan - lokal, mit BLE-Fernbedienung"
   min_version: "2026.4.5"
   project:
     name: "d0np3p3.dreammaker-fan"
@@ -51,7 +51,7 @@ esp32:
       sram1_as_iram: true
 
 logger:
-  level: INFO      # DEBUG nur zum Fehlersuchen — INFO zeigt die Remote-Zeilen
+  level: INFO      # DEBUG nur zum Fehlersuchen - INFO zeigt die Remote-Zeilen
 
 api:
   encryption:
@@ -84,7 +84,7 @@ uart:
   rx_pin: GPIO16
   baud_rate: 19200
 
-# ── BLE-Scanner ──────────────────────────────────────────────────────────────
+# -- BLE-Scanner --------------------------------------------------------------
 # window/interval sind hier auf Dauerbetrieb ausgelegt: hoch genug, um die
 # Kommando-Beacons zuverlässig zu erwischen (die Remote wiederholt jeden
 # Tastendruck sehr oft), aber niedrig genug, dass WLAN stabil bleibt.
@@ -102,7 +102,7 @@ fan:
     uart_id: uart_bus
     ble_remote: true
     ble_key: !secret dm_ble_key      # 8 Byte Hex aus dem NVS
-    # ble_report_to_mcu: false       # Sackgasse — MCU ACKt, tut aber nichts
+    # ble_report_to_mcu: false       # Sackgasse - MCU ACKt, tut aber nichts
     mcu_version:
       name: "MCU Version"
       entity_category: diagnostic
