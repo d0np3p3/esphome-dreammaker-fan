@@ -61,13 +61,30 @@ GATT-Bind-Nachricht (FF01) sind genau schlüsselgroß, und die Neu-Gruppierung
 `8|6|6` zeigt sie als einziges variables Feld (siehe PROTOCOL.md). Wäre das der
 Schlüssel, könnte ESPHome ihn beim eigenen Bind lernen — kein NVS-Dump mehr nötig.
 
-- [ ] **Entscheidender Test:** Fan mit Original-FW koppeln, dabei FF01
-      mitschneiden, danach NVS dumpen und `ble_key` gegen die ersten 8 Byte
-      vergleichen
-      > Die dafür nötige GATT-Capture-Config wurde mit den übrigen
-      > Forschungs-YAMLs entfernt — bei Bedarf aus der Git-Historie holen:
-      > `git show 29538a7:ble_capture.yaml > ble_capture.yaml`
-- [ ] Falls Treffer: Bind in dm_fan.h implementieren → Feature wäre reif für `main`
+**Stand 2026-08-10 nach dem Hardware-Test:**
+
+- [x] Struktur `8|6|6` auf **zweiter, unabhängiger Fernbedienung** bestätigt —
+      die mittleren 6 Byte sind byte-identisch über beide Geräte
+- [x] ESPHome kann sich als GATT-Client verbinden (Service Discovery, Notify,
+      Write auf FF02 — alles akzeptiert)
+- [x] **FF01 ist OHNE jede Bindung lesbar** — der entscheidende Fund
+- [ ] ~~Bind per Echo~~ — funktioniert NICHT. Nach dem Echo bleibt die
+      Fernbedienung ungebunden, es kommen weiterhin nur Idle-Heartbeats.
+      Vermutlich fehlt das Gegenstück zu Schritt 3 des Handbuchs
+      („Taste am Fan drücken"), das es bei ESPHome als Partner nicht gibt.
+
+**Nächster Test — jetzt gut definiert, weil der Vor-Bind-Wert vorliegt:**
+
+Remote `84:0A:10:78:19:33` hat ungebunden `FC 55 40 41 68 7C 7F 5F` in FF01.
+
+- [ ] Diese Remote ganz normal an einen Original-FW-Fan koppeln
+- [ ] NVS dieses Fans dumpen
+- [ ] `ble_key` gegen `FC 55 40 41 68 7C 7F 5F` vergleichen
+
+Bei Treffer braucht es **gar keinen Bind**: einmal verbinden, FF01 lesen,
+Schlüssel da. Das würde die NVS-Dump-Voraussetzung komplett beseitigen und das
+Feature reif für `main` machen. Kein Treffer heißt: der Schlüssel entsteht beim
+Pairing — auch das wäre eine klare Antwort statt einer Vermutung.
 
 **Ausgeschlossen:** nicht aus der Cloud (Pairing-Mitschnitt zeigt keinen
 Austausch), nicht ableitbar aus MAC/product_id/device_id/device_key

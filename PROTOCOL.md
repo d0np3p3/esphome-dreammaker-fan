@@ -599,9 +599,36 @@ characteristic value rather than a per-connection random challenge. That fits
 the older capture, where the value differed *before* and *after* a successful
 bind.
 
-> ⚠️ The leading 8 bytes being the DES key is still **unverified**: it needs a
-> run where command beacons (`status=0x02`) arrive after the bind, so the
-> candidate can be tested against them.
+### ESPHome cannot complete the bind by echoing (2026-08-10)
+
+Echoing the FF01 value back to FF02 does **not** bind the remote. After the
+echo it keeps sending idle heartbeats only - no `status=0x02` command beacons
+ever appear. The bind stays incomplete, and the FF01 value stays unchanged
+across polls, whereas the older capture showed it differing before and after a
+successful bind.
+
+The likely reason is the manual's step 3: the original flow is completed by
+**pressing a key on the fan**, and there is no equivalent when ESPHome is the
+peer. The plain echo is evidently a handshake step, not the bind itself.
+
+### But FF01 is readable WITHOUT any pairing - and that may be the shortcut
+
+The decisive observation from this run: ESPHome connected to a completely
+unpaired remote and read FF01 with **no authentication and no bond**. If those
+leading 8 bytes are the DES key, no bind is needed at all - a device could
+simply connect once, read FF01, and have the key. That would remove the NVS-dump
+prerequisite entirely.
+
+**Decisive experiment**, now well defined because the pre-bind value is on
+record:
+
+1. Pair remote `84:0A:10:78:19:33` with a fan running original firmware
+2. Dump that fan's NVS
+3. Compare `ble_key` against `FC 55 40 41 68 7C 7F 5F`
+
+A match proves the shortcut. No match proves the key is generated during
+pairing, which settles the question the other way and leaves the NVS route as
+the only path - either outcome is worth having.
 
 ### Where the key does NOT come from
 
