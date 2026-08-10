@@ -42,6 +42,17 @@
 #   beacons show up, the ESP-side bind already worked - independently of
 #   whether the key guess is right.
 #
+# IF THE CONNECTION FAILS ("Cannot poll, not connected")
+#   1. Check the MAC in the IDLE lines. After Power+M the remote may advertise
+#      under a DIFFERENT address than the one in `remote_mac` below - then the
+#      ble_client is waiting for a device that no longer exists. Copy the MAC
+#      from the log into the substitution and reflash.
+#   2. If IDLE lines appear but no connection ever happens, the remote likely
+#      only accepts a connection inside its short pairing window: press Power+M
+#      again while the ESP is already running.
+#   3. If NO beacon lines appear at all, the remote is not advertising - press
+#      Power+M again, or replace its battery.
+#
 # UNCONFIRMED: the manual's flow confirms pairing with a button press ON THE
 #   FAN. There is no such counterpart here, so the remote may drop the bind
 #   after 15 s. This test answers that too.
@@ -82,9 +93,9 @@ esp32:
 logger:
   level: DEBUG
   logs:
-    dm_bind: INFO
-    dm_beacon: INFO
-    ble_client: INFO
+    # No per-tag overrides that raise the level: setting a tag to INFO would
+    # SUPPRESS its ESP_LOGD lines. Idle heartbeats are logged at WARN below, so
+    # nothing important depends on DEBUG being visible - but keep it open.
     esp32_ble_tracker: INFO
 
 api:
@@ -118,13 +129,15 @@ uart:
   rx_pin: GPIO16
   baud_rate: 19200
 
-# BLE scanner. High duty cycle: during the pairing window the remote
-# advertises fast and we must not miss it. Disturbs WiFi - test only.
+# BLE scanner. Window is deliberately SMALL here: a ~94% duty cycle (as used
+# for passive capture) leaves the radio almost no time to run a connection
+# procedure, which is very likely why ble_client could not connect. Scanning
+# and connecting compete for the same radio.
 esp32_ble_tracker:
   scan_parameters:
     active: true
     interval: 320ms
-    window: 300ms
+    window: 30ms
   on_ble_advertise:
     then:
       - lambda: |-
@@ -140,13 +153,19 @@ esp32_ble_tracker:
               snprintf(buf, sizeof(buf), "%02X ", d.data[i]);
               pl += buf;
             }
-            if (st == 0x01) {
-              ESP_LOGD("dm_beacon", "%s idle ctr=%02X",
-                       x.address_str().c_str(), ctr);
-            } else if (ctr != id(last_beacon_ctr)) {
+            // Deduplicate by counter - the remote repeats each event many
+            // times. Both idle and command beacons are logged at WARN: knowing
+            // the remote is alive (and under which MAC) matters as much as the
+            // payload, especially when a bind attempt seems to have failed.
+            if (ctr != id(last_beacon_ctr)) {
               id(last_beacon_ctr) = ctr;
-              ESP_LOGW("dm_beacon", "CMD st=%02X ctr=%02X payload= %s",
-                       st, ctr, pl.c_str());
+              if (st == 0x01) {
+                ESP_LOGW("dm_beacon", "%s IDLE ctr=%02X (remote alive, unbound)",
+                         x.address_str().c_str(), ctr);
+              } else {
+                ESP_LOGW("dm_beacon", "%s CMD st=%02X ctr=%02X payload= %s",
+                         x.address_str().c_str(), st, ctr, pl.c_str());
+              }
             }
           }
 
