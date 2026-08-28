@@ -52,9 +52,23 @@ Schlüssel gibt.
 
 ---
 
-## ❌ Abgeschlossen: der Schlüssel — NVS-Dump bleibt zwingend
+## 🔵 Wieder offen: der Schlüssel — nRF52840-Sniffer unterwegs
 
-**Ergebnis vom 2026-08-10: die Hypothese ist widerlegt.**
+Mit einem Sniffer wird die Frage erneut entscheidbar. Bisher haben wir immer
+nur **unsere eigene** GATT-Sitzung mit der Fernbedienung gesehen — das
+eigentliche Bind-Gespräch zwischen Remote und Original-Fan ist komplett
+unbeobachtet, und genau dort muss der Schlüssel entstehen.
+
+Günstig: die DA14580 kann nur **Legacy Pairing** (LE Secure Connections kam erst
+mit BLE 4.2), und das ist mit Wireshark entschlüsselbar, sofern der Mitschnitt
+vor dem Verbindungsaufbau startet.
+
+- [ ] Testprotokoll durchführen:
+      [`docs/nrf-sniffer-bind-capture.md`](docs/nrf-sniffer-bind-capture.md)
+
+### Was bereits ausgeschlossen ist (nicht nochmal testen)
+
+**Ergebnis vom 2026-08-10: die FF01-Hypothese ist widerlegt.**
 
 Remote `84:0A:10:78:19:33` wurde an einen Original-FW-Fan gekoppelt und ihre
 Kommando-Beacons mitgeschnitten (19 Payloads, 18 verschiedene). Dagegen getestet
