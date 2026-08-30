@@ -36,6 +36,17 @@ Schlüssel gibt.
 
 ## 🟡 Offen: Hardware-Gegenprüfung
 
+- [ ] **`mcu_version` wurde nie beobachtet.** Die Zeile
+      `MCU version: fan_XXXX` ist in keinem Log dieser Session aufgetaucht —
+      weder auf `v4.0.0-beta` noch auf `main`. Ebenso fehlt
+      `Boot state response received`. Möglich, dass die MCU auf unsere
+      Boot-Statusabfrage (`0x232A`) gar nicht antwortet.
+      Test: Config MIT `mcu_version:` neu **bauen** (nicht nur bearbeiten —
+      der Build muss neu sein), flashen, Log auf DEBUG. Erscheint die Zeile?
+      Erscheint der Sensor im `[C]`-Config-Dump?
+      Falls nicht: `on_boot_response_()` wird nie erreicht, und das Feature
+      ist Attrappe.
+
 - [ ] Smart-Modus: zeigt HA jetzt die tatsächlich geregelte Drehzahl und folgt
       ihr, wenn Temperatur/Luftfeuchtigkeit sich ändern?
       Debug-Log: `Smart mode: MCU regulated speed to X% (we showed Y%)`
