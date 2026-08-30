@@ -21,6 +21,34 @@ There is also a good chance decryption is not even needed: our own ESP32 read
 FF01 in cleartext from an unpaired remote without any bond, so at least part of
 this service is unencrypted.
 
+## The fleet, as of 2026-08-30
+
+| Fan | Firmware | Remote | Role in this test |
+|---|---|---|---|
+| #1 | ESPHome | remote #1, `ble_key` known | working setup - leave alone |
+| #2 | ESPHome v3.1.0 | none | overwintering |
+| #3 | **original** | remote #2 (`84:0A:10:78:19:33`) | **NVS holds remote #2's key - dump it** |
+| #4 | **original** | none | **pairing partner for the capture** |
+
+Two things follow from this:
+
+**Dump fan #3's NVS while you still can.** It holds the `ble_key` for remote #2,
+generated when they were paired. Flash that fan and the key is gone for good -
+and with it any chance of using remote #2 with ESPHome.
+
+```bash
+esptool.py --port COMx read_flash 0x9000 0x4000 nvs_backup.bin
+```
+
+**That dump also makes this test decisive rather than exploratory.** With a known
+(capture, `ble_key`) pair you are no longer guessing what to look for: you scan
+the capture for those exact 8 bytes. Either they appear - and you know where the
+key comes from - or they do not, and the key is derived locally from something
+that was exchanged.
+
+Use fan #4 as the pairing partner so fan #3's key stays intact until it is
+safely dumped.
+
 ## What you need
 
 - **nRF52840 dongle** with *nRF Sniffer for Bluetooth LE* firmware
