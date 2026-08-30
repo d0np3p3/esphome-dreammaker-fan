@@ -20,7 +20,7 @@ esphome:
   min_version: "2026.4.5"
   project:
     name: "d0np3p3.dreammaker-fan"
-    version: "4.0.0-beta"
+    version: "3.1.0"
   on_boot:
     priority: -100
     then:
