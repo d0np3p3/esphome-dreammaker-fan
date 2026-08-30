@@ -86,10 +86,13 @@ fan:
     name: "DM Fan"
     uart_id: uart_bus
     # log_raw_frames: true   # uncomment to dump every MCU frame as hex at DEBUG level
-    # ble_remote / ble_key -> siehe remote_control.yaml (Branch v4.0.0-beta)
-    mcu_version:
-      name: "MCU Version"
-      entity_category: diagnostic
+    #
+    # Diese Config zieht die Komponente von `main`. Dort gibt es NUR:
+    #   uart_id, temperature, humidity, log_raw_frames
+    # Alles andere - mcu_version, ble_remote, ble_key - existiert erst auf
+    # `v4.0.0-beta` und laesst die Validierung hier fehlschlagen:
+    #   "[mcu_version] is an invalid option for [fan.dm_fan]"
+    # Wer diese Optionen braucht: remote_control.yaml verwenden.
     temperature:
       name: "Temperatur"
       entity_category: diagnostic
@@ -174,9 +177,9 @@ sensor:
     update_interval: 60s
     entity_category: diagnostic
 
-# -- Version info (analog to original firmware version triple) ----------------
-# Original reported: comm_version=dmiot_v1.1.0, rf_version=v3.1.6, mcu_version=fan_0001
-# Our equivalents:   ESPHome version,           ESP-IDF version,   MCU Version (from MCU)
+# -- Version info -------------------------------------------------------------
+# Der MCU-Versions-Sensor (mcu_version) gibt es nur auf `v4.0.0-beta`,
+# siehe remote_control.yaml.
 text_sensor:
   - platform: version
     name: "ESPHome Version"
