@@ -5,15 +5,15 @@
 #include "esphome/components/uart/uart.h"
 #include "esphome/components/fan/fan.h"
 #include "esphome/components/sensor/sensor.h"
+#include "esphome/components/text_sensor/text_sensor.h"
 #include <algorithm>
 #include <cstring>
-#include <set>
 #include <string>
 
 namespace esphome {
 namespace dm_fan {
 
-static const char *const TAG = "dm_fan.v3.0.0";
+static const char *const TAG = "dm_fan.v3.1.0";
 
 // ── Protocol constants ────────────────────────────────────────────────────────
 constexpr uint8_t MAGIC_0   = 0xFA;
@@ -21,6 +21,12 @@ constexpr uint8_t MAGIC_1   = 0xCE;
 constexpr uint8_t CMD_STATE = 0x84;  // MCU→ESP full state push (RX)
 constexpr uint8_t CMD_SET   = 0x04;  // ESP→MCU single-property command (TX)
 constexpr uint8_t CMD_QUERY = 0x02;  // MCU→ESP WiFi status query
+
+// Fan modes. In Smart mode the fan sets its own speed from temperature and
+// humidity, so speed is MCU-owned there and must not be overwritten.
+constexpr uint8_t MODE_DIRECT  = 0;
+constexpr uint8_t MODE_NATURAL = 1;
+constexpr uint8_t MODE_SMART   = 2;
 
 // Resource IDs for CMD_SET — confirmed from 31 TX captures
 constexpr uint8_t RES_POWER     = 0x00;
@@ -154,13 +160,14 @@ struct FanState {
 // ── Main component ────────────────────────────────────────────────────────────
 class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
  public:
-  void set_temperature_sensor(sensor::Sensor *s) { temperature_ = s; }
-  void set_humidity_sensor(sensor::Sensor *s)    { humidity_ = s; }
-  void set_log_raw_frames(bool v)                { log_raw_frames_ = v; }
+  void set_temperature_sensor(sensor::Sensor *s)          { temperature_ = s; }
+  void set_humidity_sensor(sensor::Sensor *s)              { humidity_ = s; }
+  void set_mcu_version_sensor(text_sensor::TextSensor *s)  { mcu_version_ = s; }
+  void set_log_raw_frames(bool v)                          { log_raw_frames_ = v; }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   void setup() override {
-    ESP_LOGI(TAG, "DM Fan v3.0.0 — TX=GPIO17 RX=GPIO16 19200 baud");
+    ESP_LOGI(TAG, "DM Fan v3.1.0 — TX=GPIO17 RX=GPIO16 19200 baud");
     this->set_supported_preset_modes({"Direct Breeze", "Natural Breeze", "Smart Breeze"});
     auto restore = this->restore_state_();
     if (restore.has_value()) restore->apply(*this);
@@ -288,7 +295,10 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   FanState desired_;
   FanState hw_state_;
 
-  // Anti-flap: rollover-safe 300 ms lock after any HA→MCU command
+  // Anti-flap: short guard against a stale spontaneous frame arriving right
+  // after a HA command. Only applies to counter==0 frames now (our own command
+  // echoes are identified by their non-zero echo counter). Rollover-safe.
+  static constexpr uint32_t STALE_GUARD_MS = 250;
   uint32_t last_control_time_ = 0;
 
   // WiFi 3-stage handshake state
@@ -299,6 +309,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
 
   sensor::Sensor *temperature_{nullptr};
   sensor::Sensor *humidity_{nullptr};
+  text_sensor::TextSensor *mcu_version_{nullptr};
   bool log_raw_frames_{false};
 
   static const char *mode_name_(uint8_t m) {
@@ -373,6 +384,7 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
           if      (cmd == CMD_QUERY && parse_len_ >= 9)  on_wifi_query_();
           else if (cmd == CMD_STATE && parse_len_ >= 36) on_state_frame_();
           else if (cmd == 0x01      && parse_len_ >= 3)  on_action1_(parse_buf_[1], parse_buf_[2]);
+          else if (cmd == 0x82      && parse_len_ >= 7)  on_boot_response_();
           else ESP_LOGD(TAG, "Unknown CMD=0x%02X len=%u", cmd, parse_len_);
         } else {
           ESP_LOGW(TAG, "Checksum error: got 0x%02X expected 0x%02X", b, chk);
@@ -404,30 +416,101 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   }
 
   // ── Generic ACK for MCU action:1 commands ─────────────────────────────────
-  // 0x238D = reset command  → ACK + ignore (ESPHome does not reboot on demand)
-  // 0x1F44 = provisioning   → ACK + ignore
-  // Others                  → ACK + log
+  // 0x238D = reset command    → ACK + ignore (ESPHome does not reboot on demand)
+  // 0x1F44 = remote pairing   → ACK with data=[0x01] ("agree to pair")
+  // Others                    → ACK + log
+  //
+  // Frame format confirmed against original firmware on a fake-MCU testbench:
+  //   MCU→ESP: FA CE 00 0A 01 1F 44 [msg_id 4B] 00 01 [data] [chk]
+  //   ESP→MCU: FA CE 00 0A 81 1F 44 [msg_id 4B] 00 01 01   [chk]
+  //                                                    └─ data=0x01 = "agree"
+  // The original firmware always answers data=[0x01] regardless of the request
+  // data byte, so the ANSWER byte carries the agree(1)/unagree(0) decision.
+  // Our previous ACK sent data_len=0 (no data byte) — the MCU logs
+  // "BLE->mcu unagree to pair!" / times out in that case.
   void on_action1_(uint8_t res_hi, uint8_t res_lo) {
     uint16_t res = ((uint16_t)res_hi << 8) | res_lo;
-    uint8_t f[14] = {MAGIC_0, MAGIC_1, 0x00, 0x09, 0x81,
-                     res_hi, res_lo, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+    // Echo the request msg_id when the frame is long enough to carry one.
+    uint8_t m0 = 0x01, m1 = 0x00, m2 = 0x00, m3 = 0x00;
+    if (parse_len_ >= 7) {
+      m0 = parse_buf_[3]; m1 = parse_buf_[4];
+      m2 = parse_buf_[5]; m3 = parse_buf_[6];
+    }
+    // Only 0x1F44 is confirmed to need the trailing agree byte. Other action:1
+    // resources (e.g. 0x238D reset) keep the original data_len=0 ACK, since
+    // their real response format was never captured.
+    const bool agree = (res == 0x1F44);
+    uint8_t f[15] = {MAGIC_0, MAGIC_1, 0x00, (uint8_t)(agree ? 0x0A : 0x09), 0x81,
+                     res_hi, res_lo, m0, m1, m2, m3,
+                     0x00, (uint8_t)(agree ? 0x01 : 0x00), 0x01, 0x00};
+    const uint8_t len = agree ? 15 : 14;
     uint8_t chk = 0;
-    for (int i = 0; i < 13; i++) chk += f[i];
-    f[13] = chk;
-    write_array(f, 14);
+    for (int i = 0; i < len - 1; i++) chk += f[i];
+    f[len - 1] = chk;
+    write_array(f, len);
     if      (res == 0x238D) ESP_LOGD(TAG, "MCU reset cmd (0x238D) → ACK, ignoring");
-    else if (res == 0x1F44) ESP_LOGD(TAG, "MCU provisioning cmd (0x1F44) → ACK, ignoring");
+    else if (agree)         ESP_LOGI(TAG, "MCU remote-pairing trigger (0x1F44) → ACK agree=1");
     else                    ESP_LOGD(TAG, "MCU action:1 res=0x%04X → ACK", res);
+  }
+
+  // ── Boot-state response (action:0x82, resource:0x232A) ───────────────────
+  // MCU responds to our boot-init request with ~80 bytes of device state
+  // including version strings. We dump the full payload once for analysis
+  // and scan for the "fan_" ASCII marker to extract mcu_version (e.g. "fan_0001").
+  void on_boot_response_() {
+    uint16_t res = ((uint16_t)parse_buf_[1] << 8) | parse_buf_[2];
+    if (res != 0x232A) {
+      ESP_LOGD(TAG, "Boot response resource=0x%04X len=%u — ignored", res, parse_len_);
+      return;
+    }
+    ESP_LOGI(TAG, "Boot state response received (len=%u)", parse_len_);
+
+    // Full hex dump (one-time, at boot) so the complete 80-byte payload is
+    // visible for protocol analysis — including any version strings beyond fan_.
+    {
+      char hex[3 * 160 + 1] = {};
+      int pos = 0;
+      for (uint16_t i = 0; i < parse_len_ && pos < (int)sizeof(hex) - 3; i++)
+        pos += snprintf(hex + pos, sizeof(hex) - pos, "%02X ", parse_buf_[i]);
+      ESP_LOGI(TAG, "Boot response full payload: %s", hex);
+
+      // ASCII view — printable chars only, '.' for the rest. Makes embedded
+      // version strings (dmiot_v1.1.0, v3.1.6, fan_0001) immediately readable.
+      char ascii[161] = {};
+      int apos = 0;
+      for (uint16_t i = 0; i < parse_len_ && apos < (int)sizeof(ascii) - 1; i++) {
+        uint8_t c = parse_buf_[i];
+        ascii[apos++] = (c >= 0x20 && c < 0x7F) ? (char) c : '.';
+      }
+      ESP_LOGI(TAG, "Boot response ASCII:   %s", ascii);
+    }
+
+    // Scan payload for "fan_" ASCII prefix (0x66 0x61 0x6E 0x5F)
+    for (uint16_t i = 0; i + 4 <= parse_len_; i++) {
+      if (parse_buf_[i]   == 0x66 && parse_buf_[i+1] == 0x61 &&
+          parse_buf_[i+2] == 0x6E && parse_buf_[i+3] == 0x5F) {
+        char ver[17] = {};
+        for (int j = 0; j < 16 && (i + j) < parse_len_ && parse_buf_[i + j] != 0x00; j++)
+          ver[j] = (char) parse_buf_[i + j];
+        ESP_LOGI(TAG, "MCU version: %s (offset %u)", ver, i);
+        if (mcu_version_) mcu_version_->publish_state(ver);
+        return;
+      }
+    }
+    ESP_LOGW(TAG, "Boot response: 'fan_' marker not found — see ASCII dump above");
+    if (mcu_version_) mcu_version_->publish_state("unknown");
   }
 
   // ── MCU state report → HA ─────────────────────────────────────────────────
   void on_state_frame_() {
-    // Anti-flap: ignore MCU echo during 300 ms after a HA command.
-    // uint32 subtraction is rollover-safe — no 49-day freeze bug.
-    if (millis() - last_control_time_ < 300) {
-      ESP_LOGD(TAG, "Anti-flap lock active — skipping HA update");
-      return;
-    }
+    // Echo counter (frame bytes [3-6] / payload offset 3-6, uint32 BE).
+    // Non-zero = the MCU is echoing a command WE sent (only the ESP issues
+    // commands, so any non-zero value is necessarily our own echo).
+    // Zero = a spontaneous change (physical button or periodic report).
+    uint32_t echo = ((uint32_t)parse_buf_[3] << 24) |
+                    ((uint32_t)parse_buf_[4] << 16) |
+                    ((uint32_t)parse_buf_[5] <<  8) |
+                     (uint32_t)parse_buf_[6];
 
     FanState n;
     n.power       = parse_buf_[rx::POWER] != 0;
@@ -453,17 +536,54 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
 
     ESP_LOGI(TAG,
       "MCU: pwr=%d spd=%d%% mode=%s osc=%d angle=%d° tmr=%dmin "
-      "snd=%d led=%d lock=%d temp=%.1f°C hum=%.1f%%",
+      "snd=%d led=%d lock=%d temp=%.1f°C hum=%.1f%% echo=%u",
       n.power, n.speed, mode_name_(n.mode), n.oscillation,
       byte_to_angle(n.roll_angle), n.timer_min,
-      n.sound, n.led, n.child_lock, temp, hum
+      n.sound, n.led, n.child_lock, temp, hum, (unsigned) echo
     );
 
-    // Plausibility-checked sensor publish
+    // Sensors always publish — temp/hum are independent of fan-state flap handling.
     if (temperature_ && temp > -10.0f && temp < 60.0f)
       temperature_->publish_state(temp);
     if (humidity_ && hum >= 0.0f && hum <= 100.0f)
       humidity_->publish_state(hum);
+
+    // ── Flap suppression (counter-aware, replaces the old 300 ms blanket lock) ──
+    // 1. Our own command echo (counter != 0): the final desired state was already
+    //    pushed to HA optimistically in control(). A multi-command batch echoes
+    //    each step with intermediate states, so publishing them would flap HA.
+    if (echo != 0) {
+      // Keep the change-detection baseline current so the next spontaneous
+      // frame is not flagged as a (redundant) state change.
+      hw_state_ = n;
+
+      // Exception — Smart mode: the fan derives its speed from temperature and
+      // humidity on its own, so the value we pushed optimistically (the gear the
+      // remote transmits) is NOT what the fan actually runs at. Correct HA from
+      // the echo, otherwise the wrong number sticks forever: this branch just
+      // updated the change-detection baseline, so no later frame would fix it.
+      if (n.mode == MODE_SMART && this->speed != n.speed) {
+        ESP_LOGD(TAG, "Smart mode: MCU regulated speed to %u%% (we showed %u%%)",
+                 (unsigned) n.speed, (unsigned) this->speed);
+        desired_.speed = n.speed;
+        this->speed    = n.speed;
+        this->publish_state();
+        return;
+      }
+
+      ESP_LOGD(TAG, "Echo of our cmd (ctr=%u) — HA already updated optimistically",
+               (unsigned) echo);
+      return;
+    }
+    // 2. Spontaneous frame (counter 0) arriving right after our command may be a
+    //    stale pre-command report. A short guard window prevents a flash of the
+    //    old value before our optimistic state settles. Physical button presses
+    //    outside this window are reflected immediately (no blanket 300 ms block).
+    if (millis() - last_control_time_ < STALE_GUARD_MS) {
+      ESP_LOGD(TAG, "Spontaneous frame within %u ms guard — skipping (stale?)",
+               (unsigned) STALE_GUARD_MS);
+      return;
+    }
 
     if (n != hw_state_) {
       hw_state_ = n;
@@ -512,7 +632,8 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     f[15] = value;
     f[16] = checksum_(f, 16);
     write_array(f, 17);
-    ESP_LOGD(TAG, "TX: res=0x%02X val=0x%02X ctr=%u", resource, value, msg_counter_ - 1);
+    ESP_LOGD(TAG, "TX: res=0x%02X val=0x%02X ctr=%u", resource, value,
+             (unsigned) (msg_counter_ - 1));
   }
 
   void send_cmd_bool_(uint8_t resource, bool value) {
@@ -528,8 +649,10 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
     f[16] = (value     ) & 0xFF;
     f[17] = checksum_(f, 17);
     write_array(f, 18);
-    ESP_LOGD(TAG, "TX: res=0x%02X val=%u min ctr=%u", resource, value, msg_counter_ - 1);
+    ESP_LOGD(TAG, "TX: res=0x%02X val=%u min ctr=%u", resource, value,
+             (unsigned) (msg_counter_ - 1));
   }
+
 };
 
 }  // namespace dm_fan

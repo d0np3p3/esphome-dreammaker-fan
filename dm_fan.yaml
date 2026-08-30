@@ -1,5 +1,13 @@
-# DM Fan ESPHome Configuration
-# v3.0.0 — 3-stage WiFi handshake (non-blocking)
+# DM Fan ESPHome Configuration - STANDARD (ohne BLE-Fernbedienung)
+# ------------------------------------------------------------------------------
+# Das ist die Konfiguration für den Normalfall: Steuerung über Home Assistant,
+# Sensoren, alles über UART. Keine BLE-Fernbedienung.
+#
+#  Du hast die Original-Fernbedienung (DM-FCB01) und willst sie weiter nutzen?
+#    -> dann `remote_control.yaml` verwenden (Branch v4.0.0-beta).
+#      Voraussetzung: der `ble_key` aus dem NVS des Fans, ausgelesen BEVOR
+#      ESPHome geflasht wurde. Details im README.
+# ------------------------------------------------------------------------------
 
 substitutions:
   device_name: dreammaker-fan
@@ -8,11 +16,15 @@ substitutions:
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
-  comment: "Zeico / Dream Maker Smart Fan — Native UART, no cloud"
+  comment: "Zeico / Dream Maker Smart Fan - Native UART, no cloud"
   min_version: "2026.4.5"
   project:
     name: "d0np3p3.dreammaker-fan"
-    version: "3.0.0"
+    version: "4.0.0-beta"
+  on_boot:
+    priority: -100
+    then:
+      - lambda: 'id(esp_idf_version).publish_state(esp_get_idf_version());'
 
 esp32:
   board: esp32dev
@@ -41,15 +53,18 @@ wifi:
 
 captive_portal:
 
-bluetooth_proxy:
-  active: false  # true = BLE connections (e.g. Xiaomi thermometers), false = scan only
+# BLE wird hier nicht gebraucht. Wer den ESP32 zusätzlich als
+# Bluetooth-Proxy für HA nutzen will, kann das einkommentieren:
+# bluetooth_proxy:
+#   active: false
 
-# ── External component ────────────────────────────────────────────────────────
+# -- External component --------------------------------------------------------
 external_components:
   - source:
       type: git
       url: https://github.com/d0np3p3/esphome-dreammaker-fan
       ref: main
+    refresh: 0s  # always pull the latest branch state - no "Clean Build Files" needed
     components: [dm_fan]
   # Local (for testing):
   # - source:
@@ -57,20 +72,24 @@ external_components:
   #     path: components
   #   components: [dm_fan]
 
-# ── UART ─────────────────────────────────────────────────────────────────────
+# -- UART ---------------------------------------------------------------------
 uart:
   id: uart_bus
   tx_pin: GPIO17
   rx_pin: GPIO16
   baud_rate: 19200  # confirmed from hardware test 2026-05-23
 
-# ── Fan: Power / Speed 1-100% / Oscillation ──────────────────────────────────
+# -- Fan: Power / Speed 1-100% / Oscillation ----------------------------------
 fan:
   - platform: dm_fan
     id: my_fan
     name: "DM Fan"
     uart_id: uart_bus
     # log_raw_frames: true   # uncomment to dump every MCU frame as hex at DEBUG level
+    # ble_remote / ble_key -> nur auf Branch v4.0.0-beta, siehe README
+    mcu_version:
+      name: "MCU Version"
+      entity_category: diagnostic
     temperature:
       name: "Temperatur"
       entity_category: diagnostic
@@ -78,8 +97,8 @@ fan:
       name: "Luftfeuchtigkeit"
       entity_category: diagnostic
 
-# ── Selects: Winkel ──────────────────────────────────────────────────────────
-# Note: Mode (Direct/Natural/Smart) is now a fan preset — visible in the HA fan card.
+# -- Selects: Winkel ----------------------------------------------------------
+# Note: Mode (Direct/Natural/Smart) is now a fan preset - visible in the HA fan card.
 select:
   - platform: template
     name: "Oszillationswinkel"
@@ -103,7 +122,7 @@ select:
         if (x == "140°") deg = 140;
         id(my_fan)->set_roll_angle(deg);
 
-# ── Timer 0-8h ────────────────────────────────────────────────────────────────
+# -- Timer 0-8h ----------------------------------------------------------------
 number:
   - platform: template
     name: "Timer (Stunden)"
@@ -116,7 +135,7 @@ number:
     set_action:
       lambda: "id(my_fan)->set_timer_hours(x);"
 
-# ── Switches: Child lock / LED / Sound ───────────────────────────────────────
+# -- Switches: Child lock / LED / Sound ---------------------------------------
 switch:
   - platform: template
     name: "Kindersicherung"
@@ -142,7 +161,7 @@ switch:
     turn_on_action:  { lambda: "id(my_fan)->set_sound(true);" }
     turn_off_action: { lambda: "id(my_fan)->set_sound(false);" }
 
-# ── Diagnostic sensors ───────────────────────────────────────────────────────
+# -- Diagnostic sensors -------------------------------------------------------
 sensor:
   - platform: uptime
     name: "Uptime"
@@ -155,7 +174,23 @@ sensor:
     update_interval: 60s
     entity_category: diagnostic
 
-# ── Buttons: Rotate left / right ─────────────────────────────────────────────
+# -- Version info (analog to original firmware version triple) ----------------
+# Original reported: comm_version=dmiot_v1.1.0, rf_version=v3.1.6, mcu_version=fan_0001
+# Our equivalents:   ESPHome version,           ESP-IDF version,   MCU Version (from MCU)
+text_sensor:
+  - platform: version
+    name: "ESPHome Version"
+    icon: "mdi:package-up"
+    entity_category: diagnostic
+
+  - platform: template
+    name: "ESP-IDF Version"
+    id: esp_idf_version
+    icon: "mdi:chip"
+    entity_category: diagnostic
+    update_interval: never
+
+# -- Buttons: Rotate left / right ---------------------------------------------
 button:
   - platform: template
     name: "Nach Links drehen"

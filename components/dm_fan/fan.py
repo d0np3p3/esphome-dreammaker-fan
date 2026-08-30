@@ -1,10 +1,10 @@
 """
 DM Fan — fan platform for ESPHome 2026.x
-v3.0 — 3-stage WiFi handshake (non-blocking)
+v3.1 — MCU version readout, boot response parsing
 """
 import esphome.codegen as cg
 import esphome.config_validation as cv
-from esphome.components import fan, uart, sensor
+from esphome.components import fan, uart, sensor, text_sensor
 from esphome.const import (
     CONF_ID,
     DEVICE_CLASS_TEMPERATURE,
@@ -17,18 +17,22 @@ from esphome.const import (
 from . import dm_fan_ns
 
 DEPENDENCIES = ["uart"]
-AUTO_LOAD = ["sensor", "fan"]
+AUTO_LOAD = ["sensor", "text_sensor", "fan"]
 
 DmFan = dm_fan_ns.class_("DmFan", fan.Fan, cg.Component, uart.UARTDevice)
 
-CONF_UART_ID        = "uart_id"
-CONF_TEMPERATURE    = "temperature"
-CONF_HUMIDITY       = "humidity"
-CONF_LOG_RAW_FRAMES = "log_raw_frames"
-
+CONF_UART_ID          = "uart_id"
+CONF_TEMPERATURE      = "temperature"
+CONF_HUMIDITY         = "humidity"
+CONF_MCU_VERSION      = "mcu_version"
+CONF_LOG_RAW_FRAMES   = "log_raw_frames"
 CONFIG_SCHEMA = fan.fan_schema(DmFan).extend({
     cv.Required(CONF_UART_ID): cv.use_id(uart.UARTComponent),
     cv.Optional(CONF_LOG_RAW_FRAMES, default=False): cv.boolean,
+    cv.Optional(CONF_MCU_VERSION): text_sensor.text_sensor_schema(
+        entity_category=ENTITY_CATEGORY_DIAGNOSTIC,
+        icon="mdi:chip",
+    ),
     cv.Optional(CONF_TEMPERATURE): sensor.sensor_schema(
         unit_of_measurement=UNIT_CELSIUS,
         device_class=DEVICE_CLASS_TEMPERATURE,
@@ -45,7 +49,6 @@ CONFIG_SCHEMA = fan.fan_schema(DmFan).extend({
     ),
 }).extend(cv.COMPONENT_SCHEMA)
 
-
 async def to_code(config):
     var = cg.new_Pvariable(config[CONF_ID])
     await cg.register_component(var, config)
@@ -53,6 +56,10 @@ async def to_code(config):
     await fan.register_fan(var, config)
 
     cg.add(var.set_log_raw_frames(config[CONF_LOG_RAW_FRAMES]))
+
+    if mcuv_conf := config.get(CONF_MCU_VERSION):
+        sens = await text_sensor.new_text_sensor(mcuv_conf)
+        cg.add(var.set_mcu_version_sensor(sens))
 
     if temp_conf := config.get(CONF_TEMPERATURE):
         sens = await sensor.new_sensor(temp_conf)

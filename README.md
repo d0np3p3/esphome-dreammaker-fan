@@ -23,6 +23,7 @@ Fully local, no cloud, no Tuya — works 100% offline via Home Assistant.
 | WiFi keepalive — 3-stage (prevents MCU reboot) | ✅ |
 | Boot state sync from MCU | ✅ |
 | Anti-flap lock (300 ms) | ✅ |
+| MCU version readout | ✅ |
 | BLE remote (DM-FCB01) | ✅ on the **`v4.0.0-beta`** branch — see below |
 
 ---
@@ -36,7 +37,9 @@ fully local, no cloud, no re-pairing. Confirmed working on hardware.
 
 **This is not part of `main`.** It needs a per-device key (`ble_key`) that can
 only be extracted from the fan's NVS **before** ESPHome is flashed, which makes
-it unsuitable as a default. If you have the original remote and still run the
+it unsuitable as a default. Everything else — including the MCU version readout,
+the corrected `0x1F44` ACK and the Smart-mode speed handling — is on `main`
+too; the branches differ only in the BLE remote. If you have the original remote and still run the
 stock firmware, dump your NVS first:
 
 ```bash
