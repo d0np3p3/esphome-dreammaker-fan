@@ -21,6 +21,8 @@ alles optional oder braucht Hardware-Gegenprüfung.
 | DES-Implementierung | selbstgeschrieben, gegen FIPS-Vektor + Captures geprüft |
 | `0x1F44`-ACK-Bug | gefixt (`data_len=1, data=[01]`) |
 | `0x1F41`-Frameformat | hardware-bestätigt (MCU ACKt) — aber wirkungslos |
+| `mcu_version` | hardware-bestätigt: liefert `fan_0001` |
+| Backport nach `main` | v3.1.0 — kompiliert, bootet, steuert, `mcu_version` läuft |
 | Smart-Modus | Speed ist MCU-eigen, wird nicht mehr überschrieben |
 
 ### Branch-Aufteilung
@@ -36,16 +38,13 @@ Schlüssel gibt.
 
 ## 🟡 Offen: Hardware-Gegenprüfung
 
-- [ ] **`mcu_version` wurde nie beobachtet.** Die Zeile
-      `MCU version: fan_XXXX` ist in keinem Log dieser Session aufgetaucht —
-      weder auf `v4.0.0-beta` noch auf `main`. Ebenso fehlt
-      `Boot state response received`. Möglich, dass die MCU auf unsere
-      Boot-Statusabfrage (`0x232A`) gar nicht antwortet.
-      Test: Config MIT `mcu_version:` neu **bauen** (nicht nur bearbeiten —
-      der Build muss neu sein), flashen, Log auf DEBUG. Erscheint die Zeile?
-      Erscheint der Sensor im `[C]`-Config-Dump?
-      Falls nicht: `on_boot_response_()` wird nie erreicht, und das Feature
-      ist Attrappe.
+- [x] **`mcu_version` bestätigt (2026-08-30).** Nach einem Neubau MIT
+      `mcu_version:` liefert der Sensor in Home Assistant `fan_0001`. Die MCU
+      beantwortet die Boot-Statusabfrage (`0x232A`) also, und
+      `on_boot_response_()` extrahiert den Marker korrekt.
+      Frühere Logs zeigten den Sensor nur deshalb nicht, weil die Binary
+      unverändert war — eine bearbeitete YAML allein reicht nicht, es braucht
+      einen neuen Build.
 
 - [ ] Smart-Modus: zeigt HA jetzt die tatsächlich geregelte Drehzahl und folgt
       ihr, wenn Temperatur/Luftfeuchtigkeit sich ändern?
