@@ -106,22 +106,25 @@ capture decides which, and in two of three cases the NVS prerequisite is gone.
 Evidence that something is written *into* the remote during the bind: its FF01
 value differs before and after (PROTOCOL.md, `29 B0 …` → `0D 0A …`).
 
-### Check this before touching any hardware
+### Ruled out first: the key is not readable from the remote (2026-09-03)
 
-Remote #1's `ble_key` is known — it is the working setup — and its **post-bind**
-FF01 is already written down. The two were never compared, because the 2026-08-10
-refutation used remote #2, whose post-bind value was never read:
+Before spending any hardware time, the cheap version of the question was
+settled. Remote #1's `ble_key` is known — it is the working setup — and its
+post-bind FF01 has been on record since 2026-06-10. The two had never been
+compared, because the 2026-08-10 refutation used remote #2, whose post-bind
+value was never read.
 
-```
-remote #1 post-bind FF01[0:8]   0D 0A 40 15 DC 7C 45 43
-   (nrf-sniffer-bind-capture.md transcribes this as  0D 0A 40 15 5D C7 C4 54 —
-    the two documents disagree after byte 4; test against both)
-compare against                 dm_ble_key from your secrets.yaml
-```
+Compared now, via `tools/keycheck.py`: **no match**, on either transcription of
+that value, in any window, reversed, nibble-shifted, byte-swapped, or hashed —
+and no shared 4-byte run. A derivation from the bind's two tokens came back
+negative too (byte ops, 1404 hash variants, DES both directions).
 
-A match means the key is simply readable from the remote after a bind, and the
-whole NVS prerequisite disappears without any capture at all. Costs ten seconds.
-Do it first.
+So reading FF01 after a bind does not hand you the key, and the NVS prerequisite
+does not fall this way. What survives is the sharper version of the target
+below: **the key is established during the bind but appears nowhere in the
+remote's readable state**, so it has to be in traffic nobody has captured — and
+the one part never observed is what the *fan* writes. Every FF02 write on record
+is our own echo, not the original module's.
 
 ### A ciphertext corpus is the fallback, not the plan
 

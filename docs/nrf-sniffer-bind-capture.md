@@ -128,12 +128,17 @@ remote #1  4B:F2:7E:47:E5:6E
 Note the value **changes across a successful bind** — so whatever the bind
 writes, it lands in this characteristic.
 
-**Remote #1's `ble_key` is known, so this value can be checked against it right
-now, with no hardware.** That comparison has never been made: the 2026-08-10
-refutation ("FF01 is NOT the key") used remote #2's *pre-bind* value, and remote
-#2's post-bind value was never read. What is settled is that the pre-pairing
-value is not the key — not the post-bind one. See the scope correction in
-PROTOCOL.md.
+**Checked against remote #1's known `ble_key` on 2026-09-03 — no match.** That
+comparison had never been made (the 2026-08-10 refutation used remote #2's
+*pre-bind* value, and remote #2's post-bind value was never read), so it was
+worth closing. Both transcriptions above failed, in every window, reversal,
+nibble shift and hash, as did a derivation from the before/after token pair.
+Reproduce with `tools/keycheck.py`; details in PROTOCOL.md.
+
+Consequence for this capture: **the key is not in what the remote exposes**, so
+do not go looking for it in FF01 reads. It has to be in the bind traffic itself,
+and the never-observed part of that is what the *fan* writes — every FF02 write
+on record is our own echo, not the original module's. Prioritise accordingly.
 
 ## Already ruled out — do not spend time re-testing
 

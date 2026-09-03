@@ -659,37 +659,51 @@ running original firmware.
 This closes the question that gated moving the feature to `main`. The NVS-dump
 prerequisite is real and unavoidable with everything known so far.
 
-#### ⚠️ Scope correction 2026-09-03 — this tested the PRE-bind value only
+#### Confirmed 2026-09-03 — the post-bind value is not the key either
 
-The above is narrower than it reads. The value fed into all thirteen windows was
-`FC 55 40 41 68 7C 7F 5F` — remote #2's FF01 read **while unpaired** (step 3 of
-the experiment below says so explicitly). Remote #2's **post-bind** FF01 was
-never read.
+The verdict above was reached using remote #2's FF01 read **while unpaired**
+(`FC 55 40 41 68 7C 7F 5F`; step 3 of the experiment below says so). Since this
+document also records that the FF01 value **changes across a successful bind**,
+that left the post-bind value formally untested — a gap worth closing, because a
+readable post-bind key would have removed the NVS prerequisite entirely.
 
-That matters because this same document records that the FF01 value **changes
-across a successful bind** (`29 B0 …` → `0D 0A …` on remote #1). Testing the
-pre-bind value against post-bind command beacons therefore cannot rule out the
-post-bind value. What is settled is: *the value the remote exposes before
-pairing is not the key.* Whether the value it exposes **after** pairing is the
-key has never been tested.
+It has now been closed on remote #1, the one device where both quantities are
+known: its `ble_key` (working setup) and its post-bind FF01 (recorded
+2026-06-10). **No match.** Tested with `tools/keycheck.py`:
 
-**The test needs no hardware.** Remote #1 is the working setup, so its `ble_key`
-is known, and its post-bind FF01 is on record right here:
+- all 8-byte windows of both 20-byte messages, pre- and post-bind
+- reversed, nibble-shifted (transcription drift), byte-pair-swapped
+- constant XOR/ADD against the key; MD5/SHA1/SHA256 over every part
+- both transcriptions of the post-bind value (see the discrepancy note below)
 
-```
-remote #1 post-bind FF01[0:8]   0D 0A 40 15 DC 7C 45 43
-compare against                 dm_ble_key from secrets.yaml
-```
+Not even a shared 4-byte run between the key and any recorded FF01 value.
 
-A match means the key is handed to the remote during the bind and can simply be
-read back afterwards — no NVS dump, ever. That removes the prerequisite gating
-this feature from `main`.
+A derivation `f(TokenA, TokenB) → key` was tested as well, using the complete
+triple remote #1 now provides: pairwise XOR/ADD/SUB, 256-constant XOR/ADD, NOT,
+1404 hash variants over concatenations of both tokens with the constant middle
+block and the MAC, and DES in both directions with every plausible key/data
+pairing. Nothing.
 
-> **Byte discrepancy — check both.** `docs/nrf-sniffer-bind-capture.md` records
-> this value as `0D 0A 40 15 5D C7 C4 54`, differing from PROTOCOL.md's
-> `0D 0A 40 15 DC 7C 45 43` after the first four bytes. Both are internally
-> consistent (each tail repeats its own `[0..5]`), so consistency cannot say
-> which transcription is right. Compare the key against both.
+**So the SETTLED verdict stands, on better evidence than it originally had.**
+The key is not exposed by the remote in either state, and the NVS prerequisite
+is not removable this way.
+
+> **Caveat.** This assumes the 2026-06-10 token pair and the `ble_key` come from
+> the *same* bind. If remote #1 was re-paired between those recordings, the
+> negative proves nothing — re-run `tools/keycheck.py` after any future bind
+> where both sides are captured together.
+
+> **Byte discrepancy.** `docs/nrf-sniffer-bind-capture.md` records the post-bind
+> value as `0D 0A 40 15 5D C7 C4 54`, differing from `0D 0A 40 15 DC 7C 45 43`
+> here after the first four bytes. Both are internally consistent (each tail
+> repeats its own `[0..5]`), so structure cannot say which is right. Both were
+> tested above; both failed.
+
+**Where that leaves the key.** It is established during the bind but appears
+nowhere in the remote's readable state. The one part of the bind never observed
+is what the **fan** writes — every FF02 write on record is our own echo, not the
+original module's. That traffic is the remaining suspect, and capturing it is
+the point of [`docs/nrf-sniffer-remote-capture.md`](docs/nrf-sniffer-remote-capture.md).
 
 ### FF01 is readable without pairing - but it is not the key
 

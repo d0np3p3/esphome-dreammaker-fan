@@ -97,26 +97,33 @@ Zählerschritt bei t=12,13 s ist also ein Tastendruck ohne Peer.
 Der ESP ist zum Auslesen nicht erreichbar, Fan und Remote bleiben vorerst
 original, BT-Proxy ist aus.
 
-- [ ] ⭐ **Zuerst, ohne jede Hardware: `dm_ble_key` gegen die Post-Bind-FF01 von
-      Remote #1 halten.** Remote #1 ist das laufende Setup, ihr Schlüssel ist
-      also bekannt, und ihr Wert *nach* dem Bind steht seit dem 2026-06-10 im
-      Repo. Verglichen wurde beides nie.
+- [x] **Post-Bind-FF01 gegen den bekannten Schlüssel geprüft (2026-09-03) —
+      kein Treffer.** Die Widerlegung von 2026-08-10 hatte nur den *ungepaarten*
+      Wert von Remote #2 getestet (`FC 55 40 41 68 7C 7F 5F`); der Wert nach dem
+      Bind war nie geprüft, obwohl er sich laut PROTOCOL.md über den Bind hinweg
+      ändert. Nachgeholt an Remote #1, wo beide Größen bekannt sind: kein
+      Treffer in irgendeinem Fenster, rückwärts, nibble-verschoben,
+      byte-getauscht oder gehasht — nicht mal ein gemeinsamer 4-Byte-Lauf, und
+      das für **beide** widersprüchlichen Transkriptionen. Eine Ableitung aus
+      dem Token-Paar vor/nach dem Bind (Byte-Ops, 1404 Hash-Varianten, DES in
+      beide Richtungen) ebenfalls negativ. Reproduzierbar mit
+      `tools/keycheck.py`, Positivkontrolle im Skript enthalten.
 
-      ```
-      0D 0A 40 15 DC 7C 45 43     (PROTOCOL.md)
-      0D 0A 40 15 5D C7 C4 54     (nrf-sniffer-bind-capture.md — die beiden
-                                   Dokumente widersprechen sich ab Byte 4)
-      ```
+**Das Verdikt „der Schlüssel liegt nur im NVS" steht damit auf besserer
+Grundlage als vorher** — geprüft an dem einen Gerät, wo Token-Paar *und*
+Schlüssel vorliegen. Der Schlüssel ist in nichts enthalten, was die Remote
+lesbar herausgibt. Ihn nach einem Bind einfach auszulesen, funktioniert nicht.
 
-      Trifft einer zu, wird der Schlüssel beim Bind an die Remote übergeben und
-      ist danach schlicht auslesbar — die NVS-Voraussetzung fällt komplett weg.
+Vorbehalt: das setzt voraus, dass Token-Paar (2026-06-10) und `ble_key` aus
+*demselben* Bind stammen. Wurde Remote #1 dazwischen neu gekoppelt, beweist das
+Negativ nichts — dann bei nächster Gelegenheit mit frisch zusammen erfassten
+Daten wiederholen.
 
-**Die Widerlegung „FF01 ist nicht der Schlüssel" (2026-08-10) ist enger als sie
-dasteht.** Getestet wurde `FC 55 40 41 68 7C 7F 5F` — die FF01 von Remote #2 im
-**ungepaarten** Zustand. Der Post-Bind-Wert von Remote #2 wurde nie gelesen, und
-laut PROTOCOL.md ändert sich der Wert über einen erfolgreichen Bind hinweg.
-Belegt ist also: *der Wert vor dem Pairing ist nicht der Schlüssel.* Über den
-Wert danach ist nichts bekannt.
+**Damit schärft sich das Ziel des Mitschnitts:** der Schlüssel entsteht beim
+Bind, taucht aber im lesbaren Zustand der Remote nicht auf — er muss also in
+Verkehr stecken, den noch nie jemand aufgezeichnet hat. Und der eine nie
+beobachtete Teil ist, **was der Fan schreibt**: jeder protokollierte FF02-Write
+ist unser eigenes Echo, nicht der des Originalmoduls.
 
 **Mitschnitt B (Bind) ist damit die Priorität, nicht gestrichen.** Der Zweck ist
 nicht, einen Schlüsselwert aus dem Trace zu ziehen, sondern die
