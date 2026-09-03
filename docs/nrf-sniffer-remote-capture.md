@@ -62,14 +62,8 @@ happened.
 If it did, remote #2 is no longer bound to fan #3, and the `ble_key` in fan #3's
 NVS no longer describes any future traffic from that remote.
 
-**Dump fan #3's NVS anyway, now.** The key remains the ground truth for the
-19-payload corpus captured on 2026-08-10 while the two were still bound, it is
-the only known-good (capture, key) pair this project has, and the dump costs
-nothing:
-
-```bash
-esptool.py --port COMx read_flash 0x9000 0x4000 nvs_backup.bin
-```
+This is now the **first thing the next capture answers**, and it costs one
+button press — see *Step 0* below.
 
 ### Cross-check against the v4 branch
 
@@ -82,52 +76,103 @@ verified that a device with a different `ble_model` advertises different bytes.
 
 ---
 
-## Order of operations
+## Without an NVS dump (situation as of 2026-09-03)
 
-One step here is irreversible, so the sequence is not free:
+The fan's ESP module is not reachable for a flash read, and fan and remote both
+stay on original firmware for now. That removes the `ble_key` from the picture
+entirely, and it changes what each capture is worth:
 
-1. **Dump fan #3's NVS.** Before anything else, and regardless of what happened
-   above. Flashing that fan destroys the key permanently.
-2. **Capture A** — command beacons, only if remote #2 is still bound to fan #3.
-3. **Capture B** — the bind exchange, using fan #4 as partner.
+| | With NVS dump | Without |
+|---|---|---|
+| Capture A — button beacons | validates the DES chain end to end | **the only route to usable data**: a labelled ciphertext corpus |
+| Capture B — bind exchange | decisive: compare the capture against the real key | **postpone** — no key to compare against, and it costs the bind |
 
-Capture B necessarily presses *Power + M*, which ends any bind Capture A relies
-on. B after A, never the other way round.
+So the order inverts. Capture A is the priority, Capture B is off the table for
+now, and the reason is worth being explicit about: *Power + M* clears the bind
+between remote #2 and fan #3. Without an NVS dump afterwards, spending that bind
+buys a capture nobody can check an answer against. Don't spend it yet.
+
+### Why a ciphertext corpus is still worth having
+
+The learn table was retired on 2026-08-03 because DES decryption made it
+unnecessary (TODO.md, *Eingestellt*). Without key access that reasoning no
+longer holds, and the table comes back as the only path — with one advantage it
+did not have before: the payload's behaviour is now fully understood.
+
+PROTOCOL.md establishes that the payload is deterministic ECB with no rolling
+code — the same target state always produces the same eight bytes, confirmed by
+four independent repeats. That is exactly the property a match table needs. A
+receiver can compare the raw 8-byte payload against stored values and act,
+without ever holding the key.
+
+The catch, and it is a real one: the payload encodes the **complete target
+state**, not a button ID. So entries are needed per reachable state, not per
+button — 23 distinct payloads came out of 27 presses. The table is therefore
+worth building against the states actually used, not exhaustively.
+
+This is also the one dataset that is only capturable **right now**, while the
+two devices are still paired and on original firmware. The analysis can wait;
+the recording cannot.
 
 ---
 
+## Step 0 — is the remote still bound? (one button press)
+
+Everything below depends on this, and the last trace suggests the answer may be
+no. Capture 60 s, press *Power* once in the middle, and look at offset 9:
+
+- **any frame with `status=0x02`** → still bound. Go to Capture A.
+- **only `status=0x01`** → unbound. Capture A cannot produce commands; nothing
+  further is recordable until a re-bind, which is Capture B and postponed.
+
+Use the `data[9] == 02` filter below. Do not press anything else.
+
 ## Capture A — a labelled button corpus
 
-Only worth running while the remote is bound to a fan. If it emits nothing but
-`status=0x01`, it is unbound and this capture cannot produce commands — go to
-Capture B.
+What is new versus the 2026-08-03 corpus: that one was decoded, but the button
+labels were inferred from the decrypted state struct. Here the log *is* the
+ground truth, and it needs no key.
 
-What is new here versus the 2026-08-03 corpus: that one was decoded, but the
-button labels were inferred from the decrypted state struct. A timed press log
-gives ground truth for every field at once.
+Record three things per press, not two — the **resulting fan state** is what
+turns a ciphertext list into a table:
 
-1. Start the sniffer, capture unfiltered (see *Bench setup* below).
-2. Press, ~10 s apart, noting the wall-clock time of each:
+| Time | Button | Fan state after (LEDs: speed · mode · osc · timer) |
+|---|---|---|
+
+1. Start the sniffer, capture unfiltered (see *Bench setup*).
+2. Press ~10 s apart, reading the fan's LEDs after each:
    Power on · M ×4 (speed 1→2→3→4) · M long ×3 (Direct → Natural → Smart) ·
    Head-shaking on · Head-shaking off · Timer ×4 (1h→2h→3h→4h) · Power off.
-3. **Do not press Power + M.** That is the bind reset.
-4. Stop, then decrypt the `status=0x02` payloads with the dumped `ble_key` and
-   lay the plaintexts against the press log.
+3. **Do not press Power + M.** That is the bind reset — it ends the pairing this
+   capture depends on.
+4. Extract the `status=0x02` payloads and pair each with its logged state.
 
-Expected per PROTOCOL.md: a full 8-byte target-state struct per press, checksum
-`byte[7] == sum(byte[0..6]) & 0xFF`, and identical ciphertext whenever the same
-target state recurs (DES-ECB, no rolling code).
+Two checks that work without the key, both from PROTOCOL.md's ECB result:
 
-## Capture B — the bind exchange
+- **Repeats must be byte-identical.** Drive the fan back to a state you already
+  recorded and press again; the payload must match the earlier one exactly. If
+  it does not, the no-rolling-code conclusion does not hold for this remote and
+  the whole table approach is dead — worth knowing in five minutes rather than
+  after a full corpus.
+- **Distinct states must give distinct payloads.** A collision would mean the
+  payload does not carry the full state after all.
 
-The procedure is in [`nrf-sniffer-bind-capture.md`](nrf-sniffer-bind-capture.md)
-and is unchanged. Two additions from this trace:
+Recovering the key itself from such a corpus is not realistic: single DES is
+brute-forceable in principle, but the plaintexts are not known here — only their
+structure — and it is not a hobby-scale computation. Treat the table as the
+deliverable.
 
-- **Pair against fan #4**, the spare on original firmware. Fan #3 stays untouched
-  until its NVS is safely dumped.
-- **Afterwards, dump fan #4's NVS too.** That yields the key generated by the
-  very bind you just recorded — the decisive comparison, with both sides of it
-  captured in one session rather than reconstructed from two.
+## Capture B — the bind exchange (postponed)
+
+The procedure stays as written in
+[`nrf-sniffer-bind-capture.md`](nrf-sniffer-bind-capture.md). Do not run it
+under the current constraints: its value is the comparison against a dumped
+`ble_key`, and pressing *Power + M* without that dump spends the remaining bind
+for an uncheckable result.
+
+When NVS access returns, run it against **fan #4** (the spare on original
+firmware) and dump fan #4's NVS immediately afterwards — that yields the key
+generated by the very bind just recorded, both sides from one session.
 
 ---
 
@@ -137,7 +182,15 @@ and is unchanged. Two additions from this trace:
 the remote advertising entirely (TODO.md, "Verbunden = kein Advertising"), so a
 running `bind_capture.yaml` node will silence exactly what you are trying to
 record. The trace shows `98:F4:AB:3C:9D:D6` (Espressif) scanning the remote —
-that is almost certainly ours. Power it down for the capture.
+that is almost certainly ours. With the BT proxy off (2026-09-03) this should be
+settled; if that address still appears in a new trace, something else is up.
+
+**PC Bluetooth and a Logitech Bolt receiver are noise, not a problem.** Neither
+will connect to the remote, and both live at their own addresses, so the
+advertising-address filter removes them from the analysis. They do share the
+2.4 GHz band and add to the error rate — if corrupted frames stay high after
+moving the dongle, turn off the PC's Bluetooth for the capture and leave Bolt
+running only if the keyboard or mouse is actually needed to drive the capture.
 
 **Move the dongle to the remote.** ~25 corrupted frames per 882 clean ones is a
 high error rate, and the APsystems EZ1 inverter (`80:64:6F:55:D5:5E`) in the

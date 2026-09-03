@@ -92,21 +92,42 @@ Das Verhalten passt exakt auf eine **ungebundene** Remote (Befund 2026-06-01:
 ungebunden → Heartbeats plus Nullpayload, auch beim Tastendruck). Der
 Zählerschritt bei t=12,13 s ist also ein Tastendruck ohne Peer.
 
-- [ ] ⚠️ **Klären, ob in dieser Sitzung *Power + M* gedrückt wurde.** Reset und
-      Pairing sind dieselbe Aktion — die Kombination löst den Bind auch dann,
-      wenn kein Fan das Pairing abschließt. Falls ja, beschreibt der `ble_key`
-      in Fan #3 keinen künftigen Verkehr von Remote #2 mehr.
-- [ ] **NVS von Fan #3 sichern — unabhängig davon, zuerst.** Bleibt in jedem
-      Fall die Ground Truth für das 19-Payload-Corpus vom 2026-08-10 und ist das
-      einzige bekannte (Capture, Key)-Paar des Projekts.
-- [ ] Mitschnitt A (Tasten-Corpus mit Zeitprotokoll) und B (Bind gegen Fan #4),
-      in dieser Reihenfolge — B drückt *Power + M* und beendet den Bind, auf den
-      A angewiesen ist:
+### Randbedingungen 2026-09-03: kein NVS-Zugriff
+
+Der ESP ist zum Auslesen nicht erreichbar, Fan und Remote bleiben vorerst
+original, BT-Proxy ist aus. Damit fällt der `ble_key` als Prüfmaßstab weg — und
+die Reihenfolge der Mitschnitte dreht sich um:
+
+- **Mitschnitt B (Bind) ist vorerst gestrichen.** Sein Wert liegt im Vergleich
+  gegen einen ausgelesenen Schlüssel. *Power + M* würde den Bind zwischen Remote
+  #2 und Fan #3 lösen und dafür ein Ergebnis liefern, das niemand prüfen kann.
+- **Mitschnitt A (Tasten) ist damit der einzige Weg zu brauchbaren Daten** — und
+  der einzige Datensatz, der **nur jetzt** aufnehmbar ist, solange beide Geräte
+  gekoppelt und original sind.
+
+- [ ] **Schritt 0: ist die Remote überhaupt noch gebunden?** 60 s aufnehmen, ein
+      Mal *Power* drücken, Offset 9 ansehen. `status=0x02` → gebunden, weiter mit
+      A. Nur `0x01` → ungebunden, und dann geht bis zu einem Re-Bind nichts mehr.
+      Beantwortet zugleich die *Power + M*-Frage von oben.
+- [ ] **Mitschnitt A mit Zustandsprotokoll.** Pro Tastendruck drei Dinge notieren:
+      Zeit, Taste, **und den resultierenden Fan-Zustand von den LEDs**. Der
+      Zustand ist es, der aus einer Chiffrat-Liste eine Tabelle macht — ganz ohne
+      Schlüssel:
       [`docs/nrf-sniffer-remote-capture.md`](docs/nrf-sniffer-remote-capture.md)
 
-Fürs nächste Mal: **ESPHome-Knoten vorher abschalten.** Eine gehaltene
-GATT-Verbindung bringt die Remote zum Schweigen, und im Trace scannt ein
-Espressif-Gerät (`98:F4:AB:3C:9D:D6`) mit — vermutlich unser eigenes.
+Das reaktiviert die eingestellte **Lerntabelle**: sie wurde nur deshalb
+verworfen, weil die DES-Entschlüsselung sie überflüssig machte. Ohne
+Schlüsselzugriff gilt das nicht mehr, und die inzwischen belegte
+ECB-Determiniertheit (gleicher Zielzustand → identische acht Bytes, vier
+bestätigte Wiederholungen) ist genau die Eigenschaft, die eine Match-Tabelle
+braucht. Haken: die Payload trägt den **kompletten Zielzustand**, nicht eine
+Tasten-ID — Einträge also pro erreichtem Zustand, nicht pro Taste.
+
+Fürs nächste Mal: **ESPHome-Knoten vorher abschalten** — eine gehaltene
+GATT-Verbindung bringt die Remote zum Schweigen. Mit abgeschaltetem BT-Proxy
+sollte das erledigt sein; taucht `98:F4:AB:3C:9D:D6` trotzdem wieder auf, läuft
+noch etwas. PC-Bluetooth und Logitech Bolt stören nur als Bandrauschen, nicht
+inhaltlich — sie filtert die Adressfilterung weg.
 
 ### Was bereits ausgeschlossen ist (nicht nochmal testen)
 
@@ -162,7 +183,9 @@ gesichert werden muss.
 
 ## ⚪ Eingestellt
 
-- ~~Lerntabelle~~ — durch DES-Entschlüsselung überflüssig
+- ~~Lerntabelle~~ — durch DES-Entschlüsselung überflüssig.
+  **Wieder offen seit 2026-09-03:** ohne NVS-Zugriff gibt es keinen Schlüssel,
+  und damit ist die Tabelle der einzige verbleibende Weg. Siehe oben.
 - ~~Rohes Beacon-Forwarding an die MCU (`0x1F41`)~~ — Format bestätigt, aber
   wirkungslos: das ESP-Modul war die entschlüsselnde Seite, nicht die MCU
 - ~~Remote SWD~~ — `chipid: 0x000`, Debug-Port vermutlich gesperrt
