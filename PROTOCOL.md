@@ -213,6 +213,16 @@ ServiceData UUID), the manufacturer data is:
 Captured 2026-06-01 (idle): `4B:F2:7E:47:E5:6E`, company `DM`,
 `02 01 4B F2 7E 47 E5 6E 0B 01 00 00 00 00 00 00 00 00`.
 
+Note the leading `02 01` is the same value the fan stores in NVS as `ble_model`
+(`0x0201` = 513, the README's sanity check). Whether a device with a different
+`ble_model` advertises different bytes here has not been tested.
+
+> **Reading a sniffer trace against this table:** offset 8 moves constantly and
+> offset 9 rarely does, which invites reading them the wrong way round. Offset 8
+> is the counter; a trace where offset 9 never leaves `0x01` contains no button
+> presses at all, no matter how much offset 8 varies. See
+> [`docs/nrf-sniffer-remote-capture.md`](docs/nrf-sniffer-remote-capture.md).
+
 The `dm_fan` component decodes this when `ble_remote: true` and logs every
 beacon. Changed counter/status/payload → `INFO` (button event), repeated idle
 heartbeat → `DEBUG`.

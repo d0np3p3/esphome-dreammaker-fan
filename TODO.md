@@ -76,6 +76,38 @@ vor dem Verbindungsaufbau startet.
 - [ ] Testprotokoll durchführen:
       [`docs/nrf-sniffer-bind-capture.md`](docs/nrf-sniffer-bind-capture.md)
 
+### Erster Mitschnitt ausgewertet (2026-09-03) — noch keine Tastendrücke drin
+
+`remote.pcap`, 27,5 s, 6830 Frames. Aufgenommenes Gerät ist **Remote #2**
+(`84:0A:10:78:19:33`), nicht ein Ventilator — die Company ID `0x4D44` gehört
+DreamMaker, und der Fan sendet dieses Advertisement nicht.
+
+**Kein einziger Frame mit `status=0x02`.** Der variable Wert bei Offset 8
+(`0x28→0x29`) ist der Sequenzzähler, nicht der Status; Offset 9 blieb über alle
+6830 Frames auf `0x01`. Bytes 10–17 sind deshalb null — genau so steht es in der
+PROTOCOL.md-Tabelle. Fehlender GATT-Verkehr ist ebenfalls erwartbar: Tasten
+laufen über Advertising, nie über GATT.
+
+Das Verhalten passt exakt auf eine **ungebundene** Remote (Befund 2026-06-01:
+ungebunden → Heartbeats plus Nullpayload, auch beim Tastendruck). Der
+Zählerschritt bei t=12,13 s ist also ein Tastendruck ohne Peer.
+
+- [ ] ⚠️ **Klären, ob in dieser Sitzung *Power + M* gedrückt wurde.** Reset und
+      Pairing sind dieselbe Aktion — die Kombination löst den Bind auch dann,
+      wenn kein Fan das Pairing abschließt. Falls ja, beschreibt der `ble_key`
+      in Fan #3 keinen künftigen Verkehr von Remote #2 mehr.
+- [ ] **NVS von Fan #3 sichern — unabhängig davon, zuerst.** Bleibt in jedem
+      Fall die Ground Truth für das 19-Payload-Corpus vom 2026-08-10 und ist das
+      einzige bekannte (Capture, Key)-Paar des Projekts.
+- [ ] Mitschnitt A (Tasten-Corpus mit Zeitprotokoll) und B (Bind gegen Fan #4),
+      in dieser Reihenfolge — B drückt *Power + M* und beendet den Bind, auf den
+      A angewiesen ist:
+      [`docs/nrf-sniffer-remote-capture.md`](docs/nrf-sniffer-remote-capture.md)
+
+Fürs nächste Mal: **ESPHome-Knoten vorher abschalten.** Eine gehaltene
+GATT-Verbindung bringt die Remote zum Schweigen, und im Trace scannt ein
+Espressif-Gerät (`98:F4:AB:3C:9D:D6`) mit — vermutlich unser eigenes.
+
 ### Was bereits ausgeschlossen ist (nicht nochmal testen)
 
 **Ergebnis vom 2026-08-10: die FF01-Hypothese ist widerlegt.**
