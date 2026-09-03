@@ -79,25 +79,60 @@ verified that a device with a different `ble_model` advertises different bytes.
 ## Without an NVS dump (situation as of 2026-09-03)
 
 The fan's ESP module is not reachable for a flash read, and fan and remote both
-stay on original firmware for now. That removes the `ble_key` from the picture
-entirely, and it changes what each capture is worth:
+stay on original firmware for now.
 
-| | With NVS dump | Without |
-|---|---|---|
-| Capture A — button beacons | validates the DES chain end to end | **the only route to usable data**: a labelled ciphertext corpus |
-| Capture B — bind exchange | decisive: compare the capture against the real key | **postpone** — no key to compare against, and it costs the bind |
+**That makes the bind capture more important, not less.** An earlier draft of
+this document postponed it for want of a key to compare against — that was the
+wrong reading of what the capture is for. The goal is not to *extract* a key
+value from the trace. It is to learn **the message sequence of the bind**: which
+handles, which direction, and what the confirming key press on the fan puts on
+the wire.
 
-So the order inverts. Capture A is the priority, Capture B is off the table for
-now, and the reason is worth being explicit about: *Power + M* clears the bind
-between remote #2 and fan #3. Without an NVS dump afterwards, spending that bind
-buys a capture nobody can check an answer against. Don't spend it yet.
+That sequence is the one thing blocking an ESPHome-side bind. Everything else
+already works: ESPHome connects to the remote as GATT client, discovers
+services, registers notify, and writes to FF02 — all accepted (PROTOCOL.md,
+2026-08-10). It is the *same role* the fan's original module plays. What is
+missing is step 3 of the manual's flow, "press any key on the fan", for which
+there is no known wire equivalent (TODO.md, "Ein ESPHome-seitiger Bind ist nicht
+möglich"). A sniffer trace of a real bind shows exactly that step.
 
-### Why a ciphertext corpus is still worth having
+**And if ESPHome can complete the bind, the key question may dissolve.** The key
+is generated during pairing. If the *fan* side generates it and hands it over,
+then an ESPHome fan performing the same bind generates its own — no dump, ever.
+If the *remote* supplies it, ESPHome reads it during the bind — also no dump.
+Only a two-sided derivation from exchanged material would leave real work. The
+capture decides which, and in two of three cases the NVS prerequisite is gone.
+
+Evidence that something is written *into* the remote during the bind: its FF01
+value differs before and after (PROTOCOL.md, `29 B0 …` → `0D 0A …`).
+
+### Check this before touching any hardware
+
+Remote #1's `ble_key` is known — it is the working setup — and its **post-bind**
+FF01 is already written down. The two were never compared, because the 2026-08-10
+refutation used remote #2, whose post-bind value was never read:
+
+```
+remote #1 post-bind FF01[0:8]   0D 0A 40 15 DC 7C 45 43
+   (nrf-sniffer-bind-capture.md transcribes this as  0D 0A 40 15 5D C7 C4 54 —
+    the two documents disagree after byte 4; test against both)
+compare against                 dm_ble_key from your secrets.yaml
+```
+
+A match means the key is simply readable from the remote after a bind, and the
+whole NVS prerequisite disappears without any capture at all. Costs ten seconds.
+Do it first.
+
+### A ciphertext corpus is the fallback, not the plan
+
+If the bind turns out to hand the key over, none of this is needed — decryption
+works and the table is redundant again. It earns its place only in the third
+case above, where the key is derived two-sidedly and stays out of reach.
 
 The learn table was retired on 2026-08-03 because DES decryption made it
 unnecessary (TODO.md, *Eingestellt*). Without key access that reasoning no
-longer holds, and the table comes back as the only path — with one advantage it
-did not have before: the payload's behaviour is now fully understood.
+longer holds, and the table comes back as a path — with one advantage it did not
+have before: the payload's behaviour is now fully understood.
 
 PROTOCOL.md establishes that the payload is deterministic ECB with no rolling
 code — the same target state always produces the same eight bytes, confirmed by
@@ -118,12 +153,14 @@ the recording cannot.
 
 ## Step 0 — is the remote still bound? (one button press)
 
-Everything below depends on this, and the last trace suggests the answer may be
+Worth the minute it takes, because it tells you what Capture B is starting from
+and whether Capture A is possible at all. The last trace suggests the answer is
 no. Capture 60 s, press *Power* once in the middle, and look at offset 9:
 
-- **any frame with `status=0x02`** → still bound. Go to Capture A.
-- **only `status=0x01`** → unbound. Capture A cannot produce commands; nothing
-  further is recordable until a re-bind, which is Capture B and postponed.
+- **any frame with `status=0x02`** → still bound. Capture A is available, and
+  it is worth taking *before* B, since B's *Power + M* ends this bind.
+- **only `status=0x01`** → unbound. Skip A and go straight to Capture B; there
+  is nothing left to spend.
 
 Use the `data[9] == 02` filter below. Do not press anything else.
 
@@ -162,17 +199,51 @@ brute-forceable in principle, but the plaintexts are not known here — only the
 structure — and it is not a hobby-scale computation. Treat the table as the
 deliverable.
 
-## Capture B — the bind exchange (postponed)
+## Capture B — the bind exchange
 
-The procedure stays as written in
-[`nrf-sniffer-bind-capture.md`](nrf-sniffer-bind-capture.md). Do not run it
-under the current constraints: its value is the comparison against a dumped
-`ble_key`, and pressing *Power + M* without that dump spends the remaining bind
-for an uncheckable result.
+**This is the priority capture.** Procedure as written in
+[`nrf-sniffer-bind-capture.md`](nrf-sniffer-bind-capture.md); what changes is
+what you are looking for.
 
-When NVS access returns, run it against **fan #4** (the spare on original
-firmware) and dump fan #4's NVS immediately afterwards — that yields the key
-generated by the very bind just recorded, both sides from one session.
+Spending the bind costs nothing right now. Its only value was the `ble_key` in
+fan #3's NVS, which is unreachable — an unspendable asset. And the last trace
+suggests the remote may already be unbound, in which case there is nothing to
+spend.
+
+Sniffer running **before** the first button press — the `CONNECT_IND` must be in
+the trace or the sniffer cannot follow the connection and everything after it is
+lost.
+
+1. **Fan:** *Head-shaking + Timer* → 4 LEDs flash
+2. **Remote:** *Power + M* → 8 LEDs flash
+3. **Press any key on the fan** → confirmation tone
+
+### What to extract, in order
+
+1. **Step 3 on the wire.** The confirming press is the missing piece. Which
+   side writes, to which handle, with what value, between the tone and the
+   preceding traffic? This is what an ESPHome bind has to reproduce.
+2. **Direction of the handout.** Does the fan write 8 bytes to the remote, or
+   does the remote hand them up? That decides whether ESPHome can pick its own
+   key or has to read one.
+3. **FF01 before and after.** Confirm the value changes across this bind too,
+   and record the post-bind value — the one quantity remote #2 has never had
+   measured.
+4. **Any 8-byte value anywhere.** The key is 8 bytes; if it crosses the link at
+   all, it looks like this.
+5. **SMP packets.** If pairing is present, Wireshark derives the LTK from a
+   Legacy Pairing exchange and decrypts the rest — the DA14580 is BLE 4.0/4.1
+   and cannot do LE Secure Connections.
+
+The bind handshake is a plain challenge-echo with no crypto of its own
+(PROTOCOL.md, SOLVED 2026-06-10), so if a key crosses the link it is not hidden
+by application-layer encryption.
+
+### Afterwards
+
+Re-bind the remote to the fan the normal way and re-read FF01 with
+`bind_capture.yaml` — a post-bind value for remote #2 is worth having on record
+regardless of how the trace reads, and needs no sniffer.
 
 ---
 

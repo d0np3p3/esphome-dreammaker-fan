@@ -95,33 +95,65 @@ Zählerschritt bei t=12,13 s ist also ein Tastendruck ohne Peer.
 ### Randbedingungen 2026-09-03: kein NVS-Zugriff
 
 Der ESP ist zum Auslesen nicht erreichbar, Fan und Remote bleiben vorerst
-original, BT-Proxy ist aus. Damit fällt der `ble_key` als Prüfmaßstab weg — und
-die Reihenfolge der Mitschnitte dreht sich um:
+original, BT-Proxy ist aus.
 
-- **Mitschnitt B (Bind) ist vorerst gestrichen.** Sein Wert liegt im Vergleich
-  gegen einen ausgelesenen Schlüssel. *Power + M* würde den Bind zwischen Remote
-  #2 und Fan #3 lösen und dafür ein Ergebnis liefern, das niemand prüfen kann.
-- **Mitschnitt A (Tasten) ist damit der einzige Weg zu brauchbaren Daten** — und
-  der einzige Datensatz, der **nur jetzt** aufnehmbar ist, solange beide Geräte
-  gekoppelt und original sind.
+- [ ] ⭐ **Zuerst, ohne jede Hardware: `dm_ble_key` gegen die Post-Bind-FF01 von
+      Remote #1 halten.** Remote #1 ist das laufende Setup, ihr Schlüssel ist
+      also bekannt, und ihr Wert *nach* dem Bind steht seit dem 2026-06-10 im
+      Repo. Verglichen wurde beides nie.
+
+      ```
+      0D 0A 40 15 DC 7C 45 43     (PROTOCOL.md)
+      0D 0A 40 15 5D C7 C4 54     (nrf-sniffer-bind-capture.md — die beiden
+                                   Dokumente widersprechen sich ab Byte 4)
+      ```
+
+      Trifft einer zu, wird der Schlüssel beim Bind an die Remote übergeben und
+      ist danach schlicht auslesbar — die NVS-Voraussetzung fällt komplett weg.
+
+**Die Widerlegung „FF01 ist nicht der Schlüssel" (2026-08-10) ist enger als sie
+dasteht.** Getestet wurde `FC 55 40 41 68 7C 7F 5F` — die FF01 von Remote #2 im
+**ungepaarten** Zustand. Der Post-Bind-Wert von Remote #2 wurde nie gelesen, und
+laut PROTOCOL.md ändert sich der Wert über einen erfolgreichen Bind hinweg.
+Belegt ist also: *der Wert vor dem Pairing ist nicht der Schlüssel.* Über den
+Wert danach ist nichts bekannt.
+
+**Mitschnitt B (Bind) ist damit die Priorität, nicht gestrichen.** Der Zweck ist
+nicht, einen Schlüsselwert aus dem Trace zu ziehen, sondern die
+**Nachrichtenfolge des Binds** zu lernen — und vor allem, was der bestätigende
+Tastendruck **am Fan** auf die Leitung legt. Genau dieser Schritt fehlt für einen
+ESPHome-seitigen Bind; alles andere funktioniert längst (Connect, Discovery,
+Notify, Write auf FF02 — alles akzeptiert, 2026-08-10), und ESPHome spielt dabei
+dieselbe Rolle wie das Originalmodul.
+
+Kann ESPHome den Bind abschließen, löst sich die Schlüsselfrage möglicherweise
+von selbst: erzeugt die **Fan-Seite** den Schlüssel, generiert ihn ein
+ESPHome-Fan künftig selbst; liefert ihn die **Remote**, liest ESPHome ihn beim
+Bind mit. Nur eine beidseitige Ableitung wäre echte Arbeit. In zwei von drei
+Fällen ist die NVS-Voraussetzung weg.
+
+Den Bind auszugeben kostet gerade nichts: sein einziger Wert war der `ble_key`
+in Fan #3, und der ist unerreichbar.
 
 - [ ] **Schritt 0: ist die Remote überhaupt noch gebunden?** 60 s aufnehmen, ein
-      Mal *Power* drücken, Offset 9 ansehen. `status=0x02` → gebunden, weiter mit
-      A. Nur `0x01` → ungebunden, und dann geht bis zu einem Re-Bind nichts mehr.
-      Beantwortet zugleich die *Power + M*-Frage von oben.
-- [ ] **Mitschnitt A mit Zustandsprotokoll.** Pro Tastendruck drei Dinge notieren:
-      Zeit, Taste, **und den resultierenden Fan-Zustand von den LEDs**. Der
-      Zustand ist es, der aus einer Chiffrat-Liste eine Tabelle macht — ganz ohne
-      Schlüssel:
+      Mal *Power* drücken, Offset 9 ansehen. `status=0x02` → gebunden, dann lohnt
+      Mitschnitt A **vor** B. Nur `0x01` → ungebunden, direkt zu B.
+- [ ] **Mitschnitt B — der Bind.** Sniffer läuft vor dem ersten Tastendruck, das
+      `CONNECT_IND` muss drin sein. Auszuwerten in dieser Reihenfolge: Schritt 3
+      auf der Leitung · Richtung der Übergabe · FF01 vor und nach dem Bind · jeder
+      8-Byte-Wert · SMP-Pakete:
       [`docs/nrf-sniffer-remote-capture.md`](docs/nrf-sniffer-remote-capture.md)
+- [ ] **Danach:** neu binden und FF01 mit `bind_capture.yaml` auslesen. Ein
+      Post-Bind-Wert für Remote #2 fehlt bis heute und braucht keinen Sniffer.
+- [ ] Mitschnitt A (Tasten-Corpus mit Zustandsprotokoll) — nur falls B zeigt,
+      dass der Schlüssel beidseitig abgeleitet wird. Sonst überflüssig.
 
-Das reaktiviert die eingestellte **Lerntabelle**: sie wurde nur deshalb
-verworfen, weil die DES-Entschlüsselung sie überflüssig machte. Ohne
-Schlüsselzugriff gilt das nicht mehr, und die inzwischen belegte
-ECB-Determiniertheit (gleicher Zielzustand → identische acht Bytes, vier
-bestätigte Wiederholungen) ist genau die Eigenschaft, die eine Match-Tabelle
-braucht. Haken: die Payload trägt den **kompletten Zielzustand**, nicht eine
-Tasten-ID — Einträge also pro erreichtem Zustand, nicht pro Taste.
+Fällt der Schlüssel doch nicht ab, kommt die eingestellte **Lerntabelle** als
+Rückfallebene zurück: verworfen wurde sie nur, weil die DES-Entschlüsselung sie
+überflüssig machte. Die belegte ECB-Determiniertheit (gleicher Zielzustand →
+identische acht Bytes) ist genau die Eigenschaft, die eine Match-Tabelle braucht.
+Haken: die Payload trägt den **kompletten Zielzustand**, nicht eine Tasten-ID —
+Einträge also pro erreichtem Zustand, nicht pro Taste.
 
 Fürs nächste Mal: **ESPHome-Knoten vorher abschalten** — eine gehaltene
 GATT-Verbindung bringt die Remote zum Schweigen. Mit abgeschaltetem BT-Proxy
@@ -184,8 +216,8 @@ gesichert werden muss.
 ## ⚪ Eingestellt
 
 - ~~Lerntabelle~~ — durch DES-Entschlüsselung überflüssig.
-  **Wieder offen seit 2026-09-03:** ohne NVS-Zugriff gibt es keinen Schlüssel,
-  und damit ist die Tabelle der einzige verbleibende Weg. Siehe oben.
+  **Als Rückfallebene wieder offen seit 2026-09-03,** falls sich ohne
+  NVS-Zugriff kein Schlüssel beschaffen lässt. Siehe oben.
 - ~~Rohes Beacon-Forwarding an die MCU (`0x1F41`)~~ — Format bestätigt, aber
   wirkungslos: das ESP-Modul war die entschlüsselnde Seite, nicht die MCU
 - ~~Remote SWD~~ — `chipid: 0x000`, Debug-Port vermutlich gesperrt

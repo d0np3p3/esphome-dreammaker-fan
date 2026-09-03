@@ -659,6 +659,38 @@ running original firmware.
 This closes the question that gated moving the feature to `main`. The NVS-dump
 prerequisite is real and unavoidable with everything known so far.
 
+#### ⚠️ Scope correction 2026-09-03 — this tested the PRE-bind value only
+
+The above is narrower than it reads. The value fed into all thirteen windows was
+`FC 55 40 41 68 7C 7F 5F` — remote #2's FF01 read **while unpaired** (step 3 of
+the experiment below says so explicitly). Remote #2's **post-bind** FF01 was
+never read.
+
+That matters because this same document records that the FF01 value **changes
+across a successful bind** (`29 B0 …` → `0D 0A …` on remote #1). Testing the
+pre-bind value against post-bind command beacons therefore cannot rule out the
+post-bind value. What is settled is: *the value the remote exposes before
+pairing is not the key.* Whether the value it exposes **after** pairing is the
+key has never been tested.
+
+**The test needs no hardware.** Remote #1 is the working setup, so its `ble_key`
+is known, and its post-bind FF01 is on record right here:
+
+```
+remote #1 post-bind FF01[0:8]   0D 0A 40 15 DC 7C 45 43
+compare against                 dm_ble_key from secrets.yaml
+```
+
+A match means the key is handed to the remote during the bind and can simply be
+read back afterwards — no NVS dump, ever. That removes the prerequisite gating
+this feature from `main`.
+
+> **Byte discrepancy — check both.** `docs/nrf-sniffer-bind-capture.md` records
+> this value as `0D 0A 40 15 5D C7 C4 54`, differing from PROTOCOL.md's
+> `0D 0A 40 15 DC 7C 45 43` after the first four bytes. Both are internally
+> consistent (each tail repeats its own `[0..5]`), so consistency cannot say
+> which transcription is right. Compare the key against both.
+
 ### FF01 is readable without pairing - but it is not the key
 
 The decisive observation from this run: ESPHome connected to a completely

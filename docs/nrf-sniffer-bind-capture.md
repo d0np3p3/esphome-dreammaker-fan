@@ -119,8 +119,21 @@ remote #1  4B:F2:7E:47:E5:6E
   FF01 after bind:      0D 0A 40 15 5D C7 C4 54 | 00 01 03 01 00 03 | 0D 0A 40 15 5D C7
 ```
 
+> ⚠️ **Transcription conflict on the post-bind value.** PROTOCOL.md records it as
+> `0D 0A 40 15 DC 7C 45 43`, diverging from the line above after byte 4. Each is
+> internally consistent (the tail repeats its own `[0..5]`), so neither can be
+> ruled out on structure alone. Treat both as candidates until an original
+> capture settles it.
+
 Note the value **changes across a successful bind** — so whatever the bind
 writes, it lands in this characteristic.
+
+**Remote #1's `ble_key` is known, so this value can be checked against it right
+now, with no hardware.** That comparison has never been made: the 2026-08-10
+refutation ("FF01 is NOT the key") used remote #2's *pre-bind* value, and remote
+#2's post-bind value was never read. What is settled is that the pre-pairing
+value is not the key — not the post-bind one. See the scope correction in
+PROTOCOL.md.
 
 ## Already ruled out — do not spend time re-testing
 
