@@ -35,11 +35,11 @@ Fully local, no cloud, no Tuya — works 100% offline via Home Assistant.
 | **Most users** — control from Home Assistant | [`dm_fan.yaml`](dm_fan.yaml) | `main` |
 | You still use the original remote (DM-FCB01) | [`remote_control.yaml`](remote_control.yaml) | `v4.0.0-beta` |
 
-> ⚠️ **The two are not interchangeable.** The component on `main` accepts only
-> `uart_id`, `temperature`, `humidity` and `log_raw_frames`. Using
-> `mcu_version`, `ble_remote` or `ble_key` with `ref: main` fails validation
-> with *"[mcu_version] is an invalid option for [fan.dm_fan]"* — the branch and
-> the options have to match.
+> ⚠️ **The two are not interchangeable.** `ble_remote` and `ble_key` exist only
+> on `v4.0.0-beta`; using them with `ref: main` fails validation with
+> *"[ble_remote] is an invalid option for [fan.dm_fan]"* — the branch and the
+> options have to match. Everything else, `mcu_version` included, works on both
+> since the backport.
 
 The remote support lives on the **`v4.0.0-beta`** branch. It needs a per-device
 key that can only be extracted **before** flashing ESPHome, so it is not part of
