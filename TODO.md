@@ -244,6 +244,10 @@ gesichert werden muss.
 - [ ] **Korrektur in `dhewg/esphome-miot#50` posten** — Text liegt fertig in
       [`docs/esphome-miot-issue50-correction.md`](docs/esphome-miot-issue50-correction.md)
 - [ ] Flash-Backup Hälfte 2 (`0x200000`–`0x400000`) nachziehen
+- [ ] **Release `v3.1.0` anlegen.** `main` meldet sich seit `b4a67e0` als 3.1.0,
+      ein Tag fehlt. Nur über die GitHub-Oberfläche möglich (Claude-Sessions
+      dürfen weder Tags pushen noch Releases anlegen): *Releases → Draft a new
+      release*, Tag `v3.1.0` neu, Target `main`.
 - [ ] Wenn Smart-Modus gegengeprüft: Tag `v4.0.0`
 
 ---
