@@ -4,7 +4,7 @@
 # Sensoren, alles über UART. Keine BLE-Fernbedienung.
 #
 #  Du hast die Original-Fernbedienung (DM-FCB01) und willst sie weiter nutzen?
-#    -> dann `remote_control.yaml` verwenden (Branch v4.0.0-beta).
+#    -> dann `remote_control.yaml` verwenden (gleiche Komponente, ble_remote an).
 #      Voraussetzung: der `ble_key` aus dem NVS des Fans, ausgelesen BEVOR
 #      ESPHome geflasht wurde. Details im README.
 # ------------------------------------------------------------------------------

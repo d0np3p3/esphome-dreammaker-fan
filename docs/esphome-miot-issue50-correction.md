@@ -65,7 +65,7 @@ https://github.com/d0np3p3/esphome-dreammaker-fan/blob/main/PROTOCOL.md
 
 ## Optional addition — only if you want to mention the remote
 
-The BLE remote work is on a beta branch and needs a per-device key, so it may
+The BLE remote support is optional and needs a per-device key, so it may
 be more noise than help for that thread. Include only if it seems welcome:
 
 > Unrelated but possibly interesting for this thread: the original DM-FCB01
@@ -75,4 +75,4 @@ be more noise than help for that thread. Include only if it seems welcome:
 > Decrypted, the payload holds the pressed button, the complete target state
 > and a checksum — so the remote can keep working after flashing ESPHome,
 > without re-pairing. Details:
-> https://github.com/d0np3p3/esphome-dreammaker-fan/blob/v4.0.0-beta/PROTOCOL.md
+> https://github.com/d0np3p3/esphome-dreammaker-fan/blob/main/PROTOCOL.md

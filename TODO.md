@@ -25,14 +25,18 @@ alles optional oder braucht Hardware-Gegenprüfung.
 | Backport nach `main` | v3.1.0 — kompiliert, bootet, steuert, `mcu_version` läuft |
 | Smart-Modus | Speed ist MCU-eigen, wird nicht mehr überschrieben |
 
-### Branch-Aufteilung
+### Branch-Aufteilung — aufgehoben mit PR #6 (2026-09-25)
 
-- **`main`** — Standardbetrieb ohne Fernbedienung (`dm_fan.yaml`)
-- **`v4.0.0-beta`** — alles mit Fernbedienung (`remote_control.yaml`)
+Bis v3.1.0 lebte die Fernbedienung nur auf `v4.0.0-beta`, weil sich der
+`ble_key` nur **vor** dem Flashen auslesen lässt. Mit PR #6 kommt sie nach
+`main`: das Feature ist optional (`ble_remote: false` als Standard, ohne es wird
+kein BLE-Code kompiliert), `dm_fan.yaml` verhält sich unverändert.
 
-Grund: der `ble_key` lässt sich nur **vor** dem Flashen auslesen. Damit ist das
-Feature nichts für die stabile Linie, solange es keinen anderen Weg zum
-Schlüssel gibt.
+- `dm_fan.yaml` — Standardbetrieb über Home Assistant
+- `remote_control.yaml` — zusätzlich die Original-Fernbedienung
+
+Beide ziehen `ref: main`. Die NVS-Voraussetzung für die Fernbedienung bleibt
+bestehen, bis der Schlüssel anders zu beschaffen ist (`docs/testbench-bind.md`).
 
 ---
 
@@ -220,9 +224,9 @@ Nicht ableitbar aus der Remote, nicht aus ihrer Adresse, nicht aus der Cloud
 ### Was das für das Feature bedeutet
 
 Die NVS-Voraussetzung ist real und mit dem heutigen Wissensstand unumgehbar.
-Damit bleibt die Aufteilung wie sie ist: `main` ohne Fernbedienung,
-`v4.0.0-beta` mit — und die Doku muss deutlich sagen, dass **vor** dem Flashen
-gesichert werden muss.
+Die Doku muss deutlich sagen, dass **vor** dem Flashen gesichert werden muss.
+(Die damals daraus abgeleitete Branch-Trennung ist mit PR #6 aufgehoben — das
+Feature ist optional und liegt auf `main`, siehe oben.)
 
 ### Nebenbefunde aus der Testreihe
 

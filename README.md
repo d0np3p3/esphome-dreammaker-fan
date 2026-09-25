@@ -24,37 +24,33 @@ Fully local, no cloud, no Tuya — works 100% offline via Home Assistant.
 | Boot state sync from MCU | ✅ |
 | Anti-flap lock (300 ms) | ✅ |
 | MCU version readout | ✅ |
-| **BLE remote (DM-FCB01)** | ✅ **v4.0.0-beta branch only** — see below |
+| **BLE remote (DM-FCB01)** | ✅ optional — needs a per-device key, see below |
 
 ---
 
 ## Which config do I need?
 
-| | Config | Branch |
-|---|---|---|
-| **Most users** — control from Home Assistant | [`dm_fan.yaml`](dm_fan.yaml) | `main` |
-| You still use the original remote (DM-FCB01) | [`remote_control.yaml`](remote_control.yaml) | `v4.0.0-beta` |
+| | Config |
+|---|---|
+| **Most users** — control from Home Assistant | [`dm_fan.yaml`](dm_fan.yaml) |
+| You still use the original remote (DM-FCB01) | [`remote_control.yaml`](remote_control.yaml) |
 
-> ⚠️ **The two are not interchangeable.** `ble_remote` and `ble_key` exist only
-> on `v4.0.0-beta`; using them with `ref: main` fails validation with
-> *"[ble_remote] is an invalid option for [fan.dm_fan]"* — the branch and the
-> options have to match. Everything else, `mcu_version` included, works on both
-> since the backport.
+Both pull the component from `main`. The remote support is **optional**: it
+stays off unless `ble_remote: true` is set — no BLE code is even compiled
+without it — so `dm_fan.yaml` behaves exactly as before.
 
-The remote support lives on the **`v4.0.0-beta`** branch. It needs a per-device
-key that can only be extracted **before** flashing ESPHome, so it is not part of
-the stable `main` line — everything else works identically on both.
+> **Coming from the `v4.0.0-beta` branch?** The remote support has been merged
+> into `main`. Change `ref: v4.0.0-beta` to `ref: main` in your
+> `external_components`; your `ble_key` and the rest of the config stay as they
+> are.
 
 ---
 
-## BLE remote control (`v4.0.0-beta` branch)
+## BLE remote control
 
 **Confirmed working on hardware (2026-08-03)** — all five button actions decode
 and drive the fan: power, the four speed gears, all three modes, oscillation and
 the full timer cycle.
-
-> Requires `ref: v4.0.0-beta` in `external_components` — the component on `main`
-> does not contain the BLE code.
 
 The original DM-FCB01 remote keeps working after flashing ESPHome. It broadcasts
 each button press as an encrypted BLE advertisement, which `dm_fan` decrypts and
@@ -188,7 +184,7 @@ After flashing, the ESP32 talks to the fan MCU over an **internal UART already w
 
 ```
 dm_fan.yaml                    ← ESPHome configuration (UART only)
-remote_control.yaml            ← configuration WITH BLE remote (v4.0.0-beta)
+remote_control.yaml            ← configuration WITH BLE remote
 PROTOCOL.md                    ← ESP32 ↔ MCU + BLE remote protocol reference
 TODO.md                        ← open work, ordered by priority
 components/
