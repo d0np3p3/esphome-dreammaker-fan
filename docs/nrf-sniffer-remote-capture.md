@@ -204,6 +204,12 @@ deliverable.
 
 ## Capture B — the bind exchange
 
+> **Prefer the bench version.** [`testbench-bind.md`](testbench-bind.md) runs the
+> same bind against a spare ESP32 with the original firmware, so the resulting
+> `ble_key` can be read from the bench's flash afterwards — capture and key from
+> one bind, repeatable, no fan opened. Use the fan version below only if the
+> original firmware will not run on a bench board.
+
 **This is the priority capture.** Procedure as written in
 [`nrf-sniffer-bind-capture.md`](nrf-sniffer-bind-capture.md); what changes is
 what you are looking for.
@@ -223,6 +229,11 @@ lost.
 
 ### What to extract, in order
 
+0. **SMP packets first.** The firmware carries stock Bluedroid bonding strings,
+   so the bind very likely runs SMP pairing. If Pairing Request/Response,
+   Confirm and Random are in the trace, let Wireshark derive the keys and
+   decrypt the link before reading anything else — otherwise the traffic below
+   may be ciphertext.
 1. **Step 3 on the wire.** The confirming press is the missing piece. Which
    side writes, to which handle, with what value, between the tone and the
    preceding traffic? This is what an ESPHome bind has to reproduce.
@@ -234,9 +245,12 @@ lost.
    measured.
 4. **Any 8-byte value anywhere.** The key is 8 bytes; if it crosses the link at
    all, it looks like this.
-5. **SMP packets.** If pairing is present, Wireshark derives the LTK from a
-   Legacy Pairing exchange and decrypts the rest — the DA14580 is BLE 4.0/4.1
-   and cannot do LE Secure Connections.
+5. **Handles `0x14` and `0x18`.** Service `0x00FF` spans `0x10`–`0x18`, but
+   only FF01 (`0x12`) and FF02 (`0x16`) are documented. Probably descriptors;
+   worth one look.
+
+(The DA14580 is BLE 4.0/4.1 and cannot do LE Secure Connections, which is why
+step 0 is decryptable at all.)
 
 The bind handshake is a plain challenge-echo with no crypto of its own
 (PROTOCOL.md, SOLVED 2026-06-10), so if a key crosses the link it is not hidden

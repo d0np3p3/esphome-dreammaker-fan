@@ -482,6 +482,10 @@ Irrelevant for ESPHome — the ESP no longer talks to the cloud.
 
 ### Phase 3 — buttons over GATT (open)
 
+> ⚠️ **Superseded.** Buttons travel over advertisements, not GATT (correction of
+> 2026-07-31), and the beacon payload is DES-ECB under `ble_key`, not protected
+> by the BLE LTK (SOLVED 2026-08-03). Kept for history; do not build on it.
+
 Flash-dump analysis (2026-05-23) showed the remote uses **standard BLE bonding,
 not custom crypto** — the "beaconkey" is just the BLE LTK, handled natively by
 the ESP-IDF stack. So no manual decryption is needed. Two paths:
@@ -677,6 +681,9 @@ known: its `ble_key` (working setup) and its post-bind FF01 (recorded
 - both transcriptions of the post-bind value (see the discrepancy note below)
 
 Not even a shared 4-byte run between the key and any recorded FF01 value.
+Re-checked 2026-09-25 with the DES parity bits masked (`byte & 0xFE` — DES
+ignores the lowest bit of every key byte, so values differing only there are the
+same key): still no match. `tools/keycheck.py` now compares this way throughout.
 
 A derivation `f(TokenA, TokenB) → key` was tested as well, using the complete
 triple remote #1 now provides: pairwise XOR/ADD/SUB, 256-constant XOR/ADD, NOT,
@@ -761,6 +768,10 @@ Note: the remote has no dedicated Speed+/Speed−, no angle, no Sound/LED/Child-
 buttons — those fan properties are only reachable over UART from HA, not the
 remote. The remote cycles speed and timer; it cannot set an absolute value.
 
+> ⚠️ **Superseded:** the remote is not a Tuya protocol. Its beacons carry
+> DreamMaker's own company ID `0x4D44` ("DM") and a proprietary DES payload
+> (see "BLE remote" above).
+
 Context: DreamMaker is a Tuya OEM (Tuya BLE remote protocol). The original
 architecture was `remote --BLE--> Tuya ESP module --FACE 0x1F41--> fan MCU`.
 We replaced the Tuya module with ESPHome. The handshake turned out to be a
@@ -818,11 +829,26 @@ empty `ble_key`/`ble_mac` — **that fan was never successfully paired**, across
 March 2025 → May 2026. This retroactively explains why the fake-MCU testbench
 built on that image never triggered any BLE reaction.
 
+> **Correction 2026-09-25 — a simpler explanation.** An unpaired NVS is not what
+> kept the testbench silent: a fresh bind starts from an unpaired state anyway.
+> The testbench was never sent `0x1F44`, because until 2026-07-31 that resource
+> was documented as "start WiFi provisioning" rather than the pairing trigger.
+> Driving the testbench with `0x1F44` is untried — and it would bind a remote to
+> a board whose NVS can be read freely. Protocol:
+> [`docs/testbench-bind.md`](docs/testbench-bind.md).
+
 **Crypto assessment:** the firmware uses **standard ESP-IDF Bluedroid** bonding —
 strings `btc_ble_storage`, `btm_ble_set_encryption`, `btm_ble_ltk_request_reply`
 are stock stack functions, no proprietary AES/XXTEA. Combined with the
 deterministic beacon mapping, this means the remaining unknown is the beacon
 cipher, which the learn-table approach makes unnecessary to solve.
+
+> ⚠️ **Partly superseded.** The beacon cipher is solved (DES-ECB, 2026-08-03),
+> so the last sentence no longer applies. The first part still matters, and
+> more than it seemed: stock Bluedroid bonding means the bind very likely runs
+> **SMP pairing**. For a BLE 4.0/4.1 remote that is Legacy Pairing, which
+> Wireshark can decrypt from a capture — so check a bind trace for SMP before
+> anything else. See [`docs/testbench-bind.md`](docs/testbench-bind.md).
 
 ---
 

@@ -92,6 +92,34 @@ Das Verhalten passt exakt auf eine **ungebundene** Remote (Befund 2026-06-01:
 ungebunden → Heartbeats plus Nullpayload, auch beim Tastendruck). Der
 Zählerschritt bei t=12,13 s ist also ein Tastendruck ohne Peer.
 
+### ⭐ Neuer Ansatz 2026-09-25: Bind gegen ein Test-Board
+
+Ersatz-ESP32 mit der Original-Firmware, simulierte MCU am UART, Remote #2 bindet
+sich an **das Board** — dessen NVS du jederzeit lesen kannst. Mitschnitt und
+Schlüssel aus demselben Bind, beliebig oft wiederholbar, kein Fan wird geöffnet:
+[`docs/testbench-bind.md`](docs/testbench-bind.md)
+
+Warum das neu ist: der vorhandene Fake-MCU-Prüfaufbau hat „nie eine
+BLE-Reaktion ausgelöst“ — aber er hat auch nie `0x1F44` bekommen, weil das bis
+2026-07-31 als „WiFi-Provisioning“ galt statt als Pairing-Trigger.
+
+- [ ] Erste Hälfte des Flash-Backups auf ein 4-MB-Board, prüfen: bootet
+      `ota_0` (`0x110000`)? Sonst wird Hälfte 2 zur Voraussetzung.
+- [ ] Mit leerem NVS starten, offline halten — der Backup-NVS gehört einem
+      echten Fan (WLAN-Zugang, Cloud-Identität).
+- [ ] Exakten `0x1F44`-Frame an Fan #1 mit `log_raw_frames` mitschneiden
+      (Head-shaking + Timer; für das ESPHome-Setup harmlos, *Power + M* an
+      Remote #1 aber **nicht** drücken).
+- [ ] Bind unter Sniffer, NVS lesen, Schlüssel mit `tools/beacon_decrypt.py`
+      gegen echte Beacons beweisen.
+- [ ] Zweiter Bind: gleicher Schlüssel → abgeleitet; anderer → frisch und damit
+      in der Luft. Vergleich mit maskierten Paritätsbits.
+
+Nebenbefund: DES ignoriert das unterste Bit jedes Schlüsselbytes (Parität). Ein
+Schlüssel kann also in einem Mitschnitt stehen und trotzdem nicht exakt dem
+NVS-Wert gleichen. `tools/keycheck.py` vergleicht jetzt maskiert; der Befund zu
+Remote #1 hält auch so.
+
 ### Randbedingungen 2026-09-03: kein NVS-Zugriff
 
 Der ESP ist zum Auslesen nicht erreichbar, Fan und Remote bleiben vorerst

@@ -51,6 +51,16 @@ MID = h("00 01 03 01 00 03")  # constant across both remotes
 HASHES = ("md5", "sha1", "sha256")
 
 
+def same_key(a, b):
+    """True if a and b are the same DES key.
+
+    DES ignores the lowest bit of every key byte (it is a parity bit), so two
+    values that differ only there decrypt identically. Comparing exactly would
+    miss a key that turns up with different parity bits.
+    """
+    return len(a) == len(b) and all(((x ^ y) & 0xFE) == 0 for x, y in zip(a, b))
+
+
 def nibble_shift(data, n):
     bits = "".join(f"{b:02x}" for b in data)[n:]
     return bytes.fromhex(bits[: len(bits) - len(bits) % 2])
@@ -70,17 +80,17 @@ def containment(key):
         }
         for label, view in views.items():
             for i in range(max(0, len(view) - 7)):
-                if view[i : i + 8] == key:
+                if same_key(view[i : i + 8], key):
                     hits.append(f"{name}{label} window@{i}")
 
         for const in range(256):
-            if bytes(b ^ const for b in msg[:8]) == key:
+            if same_key(bytes(b ^ const for b in msg[:8]), key):
                 hits.append(f"{name} head8 XOR {const:02X}")
 
         for label, part in (("full", msg), ("head8", msg[:8]), ("mid", msg[8:14])):
             for algo in HASHES:
                 digest = hashlib.new(algo, part).digest()
-                if key in (digest[:8], digest[-8:]):
+                if same_key(digest[:8], key) or same_key(digest[-8:], key):
                     hits.append(f"{algo}({name}/{label})")
 
         # Weaker signal, but a shared run would be worth knowing about.
@@ -103,7 +113,7 @@ def derivation(key):
             ("ADD", lambda x, y: (x + y) & 0xFF),
             ("SUB", lambda x, y: (x - y) & 0xFF),
         ):
-            if bytes(fn(x, y) for x, y in zip(a, b)) == key:
+            if same_key(bytes(fn(x, y) for x, y in zip(a, b)), key):
                 hits.append(f"{label} {na} / {nb}")
 
     parts = dict(tokens, MID=MID, MAC=MAC_R1)
@@ -114,7 +124,7 @@ def derivation(key):
             for algo in HASHES:
                 digest = hashlib.new(algo, data).digest()
                 for window, offset in ((digest[:8], "[:8]"), (digest[-8:], "[-8:]"), (digest[8:16], "[8:16]")):
-                    if window == key:
+                    if same_key(window, key):
                         hits.append(f"{algo}({label}){offset}")
 
     if DES is not None:
@@ -123,9 +133,9 @@ def derivation(key):
                 if nk == nd:
                     continue
                 cipher = DES.new(k, DES.MODE_ECB)
-                if cipher.encrypt(d) == key:
+                if same_key(cipher.encrypt(d), key):
                     hits.append(f"DES-ENC {nd} under {nk}")
-                if cipher.decrypt(d) == key:
+                if same_key(cipher.decrypt(d), key):
                     hits.append(f"DES-DEC {nd} under {nk}")
     return hits
 
