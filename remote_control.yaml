@@ -1,12 +1,33 @@
-# DM Fan ESPHome Configuration - STANDARD (ohne BLE-Fernbedienung)
+# DM Fan - Fernbedienung steuert den Fan (DES-Entschlüsselung aktiv)
 # ------------------------------------------------------------------------------
-# Das ist die Konfiguration für den Normalfall: Steuerung über Home Assistant,
-# Sensoren, alles über UART. Keine BLE-Fernbedienung.
+# Das ist die eigentliche Nutzungskonfiguration: die Fernbedienung sendet ihre
+# Tastendrücke als verschlüsselten BLE-Beacon, dm_fan entschlüsselt sie mit DES
+# und setzt den Fan-Zustand über UART.
 #
-#  Du hast die Original-Fernbedienung (DM-FCB01) und willst sie weiter nutzen?
-#    -> dann `remote_control.yaml` verwenden (gleiche Komponente, ble_remote an).
-#      Voraussetzung: der `ble_key` aus dem NVS des Fans, ausgelesen BEVOR
-#      ESPHome geflasht wurde. Details im README.
+# ! VORAUSSETZUNG: der `ble_key` aus dem NVS des Fans
+#
+#   Der Schlüssel ist GERÄTESPEZIFISCH und steht nur im NVS des Fans, solange
+#   dort noch die Original-Firmware lief. Ohne ihn werden Beacons zwar geloggt,
+#   aber nicht ausgeführt.
+#
+#   Auslesen (VOR dem Flashen von ESPHome!):
+#     esptool.py --port COMx read_flash 0x9000 0x4000 nvs_backup.bin
+#
+#   Im Dump nach dem Eintrag `ble_key` suchen. Achtung, zwei Stolperfallen:
+#     - Bei `type=0x41` (blob) mit `span=2` stehen die 8 Nutzbytes NICHT im
+#       Metadaten-Eintrag, sondern am Anfang des FOLGENDEN 32-Byte-Blocks.
+#     - NVS ist wear-levelled: es gibt mehrere Kopien. Die mit echter CRC
+#       nehmen, nicht die mit `ffffffff`.
+#
+#   Gegenprobe: `ble_model` muss 0x0201 (=513) sein und `ble_mac` die MAC der
+#   Fernbedienung. Steht dort `ble_model=0`, war der Fan nie gepairt.
+#
+# ! Fernbedienung NICHT neu koppeln (Power+M)! Ein neuer Bond erzeugt einen
+#    neuen Schlüssel und der gesicherte `ble_key` wird ungültig.
+#
+#  Der Schlüssel gehört in secrets.yaml, nicht hierher:
+#      # secrets.yaml
+#      dm_ble_key: "00 11 22 33 44 55 66 77"   # <- DEIN Schlüssel, nicht dieser!
 # ------------------------------------------------------------------------------
 
 substitutions:
@@ -16,25 +37,21 @@ substitutions:
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
-  comment: "Zeico / Dream Maker Smart Fan - Native UART, no cloud"
+  comment: "Zeico / Dream Maker Smart Fan - lokal, mit BLE-Fernbedienung"
   min_version: "2026.4.5"
   project:
     name: "d0np3p3.dreammaker-fan"
     version: "4.0.0-beta"
-  on_boot:
-    priority: -100
-    then:
-      - lambda: 'id(esp_idf_version).publish_state(esp_get_idf_version());'
 
 esp32:
   board: esp32dev
   framework:
     type: esp-idf
     advanced:
-      sram1_as_iram: true  # +40 KB IRAM, eliminates bootloader warning
+      sram1_as_iram: true
 
 logger:
-  level: DEBUG
+  level: INFO      # DEBUG nur zum Fehlersuchen - INFO zeigt die Remote-Zeilen
 
 api:
   encryption:
@@ -53,40 +70,39 @@ wifi:
 
 captive_portal:
 
-# BLE wird hier nicht gebraucht. Wer den ESP32 zusätzlich als
-# Bluetooth-Proxy für HA nutzen will, kann das einkommentieren:
-# bluetooth_proxy:
-#   active: false
-
-# -- External component --------------------------------------------------------
 external_components:
   - source:
       type: git
       url: https://github.com/d0np3p3/esphome-dreammaker-fan
       ref: main
-    refresh: 0s  # always pull the latest branch state - no "Clean Build Files" needed
+    refresh: 0s
     components: [dm_fan]
-  # Local (for testing):
-  # - source:
-  #     type: local
-  #     path: components
-  #   components: [dm_fan]
 
-# -- UART ---------------------------------------------------------------------
 uart:
   id: uart_bus
   tx_pin: GPIO17
   rx_pin: GPIO16
-  baud_rate: 19200  # confirmed from hardware test 2026-05-23
+  baud_rate: 19200
 
-# -- Fan: Power / Speed 1-100% / Oscillation ----------------------------------
+# -- BLE-Scanner --------------------------------------------------------------
+# window/interval sind hier auf Dauerbetrieb ausgelegt: hoch genug, um die
+# Kommando-Beacons zuverlässig zu erwischen (die Remote wiederholt jeden
+# Tastendruck sehr oft), aber niedrig genug, dass WLAN stabil bleibt.
+# Die Debug-Werte 320/300 ms sind ~94 % Duty-Cycle und stören das WLAN.
+esp32_ble_tracker:
+  scan_parameters:
+    active: false
+    interval: 200ms
+    window: 100ms
+
 fan:
   - platform: dm_fan
     id: my_fan
     name: "DM Fan"
     uart_id: uart_bus
-    # log_raw_frames: true   # uncomment to dump every MCU frame as hex at DEBUG level
-    # ble_remote / ble_key -> fuer die Original-Fernbedienung, siehe remote_control.yaml
+    ble_remote: true
+    ble_key: !secret dm_ble_key      # 8 Byte Hex aus dem NVS
+    # ble_report_to_mcu: false       # Sackgasse - MCU ACKt, tut aber nichts
     mcu_version:
       name: "MCU Version"
       entity_category: diagnostic
@@ -97,8 +113,6 @@ fan:
       name: "Luftfeuchtigkeit"
       entity_category: diagnostic
 
-# -- Selects: Winkel ----------------------------------------------------------
-# Note: Mode (Direct/Natural/Smart) is now a fan preset - visible in the HA fan card.
 select:
   - platform: template
     name: "Oszillationswinkel"
@@ -106,12 +120,7 @@ select:
     entity_category: config
     optimistic: true
     initial_option: "90°"
-    options:
-      - "30°"
-      - "60°"
-      - "90°"
-      - "120°"
-      - "140°"
+    options: ["30°", "60°", "90°", "120°", "140°"]
     set_action:
       lambda: |-
         int deg = 90;
@@ -122,7 +131,6 @@ select:
         if (x == "140°") deg = 140;
         id(my_fan)->set_roll_angle(deg);
 
-# -- Timer 0-8h ----------------------------------------------------------------
 number:
   - platform: template
     name: "Timer (Stunden)"
@@ -135,7 +143,6 @@ number:
     set_action:
       lambda: "id(my_fan)->set_timer_hours(x);"
 
-# -- Switches: Child lock / LED / Sound ---------------------------------------
 switch:
   - platform: template
     name: "Kindersicherung"
@@ -161,7 +168,6 @@ switch:
     turn_on_action:  { lambda: "id(my_fan)->set_sound(true);" }
     turn_off_action: { lambda: "id(my_fan)->set_sound(false);" }
 
-# -- Diagnostic sensors -------------------------------------------------------
 sensor:
   - platform: uptime
     name: "Uptime"
@@ -174,23 +180,12 @@ sensor:
     update_interval: 60s
     entity_category: diagnostic
 
-# -- Version info (analog to original firmware version triple) ----------------
-# Original reported: comm_version=dmiot_v1.1.0, rf_version=v3.1.6, mcu_version=fan_0001
-# Our equivalents:   ESPHome version,           ESP-IDF version,   MCU Version (from MCU)
 text_sensor:
   - platform: version
     name: "ESPHome Version"
     icon: "mdi:package-up"
     entity_category: diagnostic
 
-  - platform: template
-    name: "ESP-IDF Version"
-    id: esp_idf_version
-    icon: "mdi:chip"
-    entity_category: diagnostic
-    update_interval: never
-
-# -- Buttons: Rotate left / right ---------------------------------------------
 button:
   - platform: template
     name: "Nach Links drehen"

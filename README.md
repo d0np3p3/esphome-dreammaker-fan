@@ -24,44 +24,95 @@ Fully local, no cloud, no Tuya — works 100% offline via Home Assistant.
 | Boot state sync from MCU | ✅ |
 | Anti-flap lock (300 ms) | ✅ |
 | MCU version readout | ✅ |
-| BLE remote (DM-FCB01) | ✅ on the **`v4.0.0-beta`** branch — see below |
+| **BLE remote (DM-FCB01)** | 🧪 **beta**, optional — needs a per-device key, see below |
 
 ---
 
-## BLE remote control → `v4.0.0-beta` branch
+## Which config do I need?
 
-The original DM-FCB01 remote can keep working after flashing ESPHome. It
-broadcasts each button press as a BLE advertisement whose 8-byte payload is
-encrypted with single DES; the component decrypts it and drives the fan —
-fully local, no cloud, no re-pairing. Confirmed working on hardware.
+| | Config |
+|---|---|
+| **Most users** — control from Home Assistant | [`dm_fan.yaml`](dm_fan.yaml) |
+| You still use the original remote (DM-FCB01) | [`remote_control.yaml`](remote_control.yaml) |
 
-**This is not part of `main`.** It needs a per-device key (`ble_key`) that can
-only be extracted from the fan's NVS **before** ESPHome is flashed, which makes
-it unsuitable as a default. Everything else — including the MCU version readout,
-the corrected `0x1F44` ACK and the Smart-mode speed handling — is on `main`
-too; the branches differ only in the BLE remote. If you have the original remote and still run the
-stock firmware, dump your NVS first:
+Both pull the component from `main`. The remote support is **optional**: it
+stays off unless `ble_remote: true` is set — no BLE code is even compiled
+without it — so `dm_fan.yaml` behaves exactly as before.
+
+> **Coming from the `v4.0.0-beta` branch?** The remote support has been merged
+> into `main`. Change `ref: v4.0.0-beta` to `ref: main` in your
+> `external_components`; your `ble_key` and the rest of the config stay as they
+> are.
+
+---
+
+## BLE remote control (beta)
+
+> **Beta.** Decoding works on hardware, but setup still depends on reading the
+> `ble_key` from the fan **before** flashing ESPHome — there is no other way to
+> obtain it yet. That is why this release line is `4.0.0-beta`.
+
+**Confirmed working on hardware (2026-08-03)** — all five button actions decode
+and drive the fan: power, the four speed gears, all three modes, oscillation and
+the full timer cycle.
+
+The original DM-FCB01 remote keeps working after flashing ESPHome. It broadcasts
+each button press as an encrypted BLE advertisement, which `dm_fan` decrypts and
+turns into fan commands — fully local, no cloud, no re-pairing.
+
+**Requires the fan's `ble_key`** — an 8-byte per-device secret stored in the
+fan's NVS. Without it the presses are logged but cannot be executed.
+
+```yaml
+fan:
+  - platform: dm_fan
+    id: my_fan
+    uart_id: uart_bus
+    ble_remote: true
+    ble_key: !secret dm_ble_key    # 8 bytes hex, e.g. "00 11 22 33 44 55 66 77"
+
+esp32_ble_tracker:                 # required by ble_remote
+  scan_parameters:
+    active: false
+    interval: 200ms
+    window: 100ms
+```
+
+See [`remote_control.yaml`](remote_control.yaml) for a complete config.
+
+### Getting the `ble_key` — do this BEFORE flashing
+
+The key only exists in the NVS of a fan still running the **original firmware**.
+Once ESPHome is flashed it may be gone, so dump it first:
 
 ```bash
 esptool.py --port COMx read_flash 0x9000 0x4000 nvs_backup.bin
 ```
 
-Then use the beta branch:
+Then locate the `ble_key` entry. Two pitfalls:
 
-```yaml
-external_components:
-  - source:
-      type: git
-      url: https://github.com/d0np3p3/esphome-dreammaker-fan
-      ref: v4.0.0-beta
-    components: [dm_fan]
-```
+- For `type=0x41` (blob) with `span=2` the 8 payload bytes are **not** in the
+  metadata entry — they sit at the start of the **following** 32-byte block.
+- NVS is wear-levelled, so several copies exist. Use the one with a real CRC,
+  not `ffffffff`.
 
-→ **[Branch `v4.0.0-beta`](https://github.com/d0np3p3/esphome-dreammaker-fan/tree/v4.0.0-beta)**
-· config: `remote_control.yaml`
-· [protocol details](https://github.com/d0np3p3/esphome-dreammaker-fan/blob/v4.0.0-beta/PROTOCOL.md)
+Sanity check: `ble_model` must be `0x0201` (513) and `ble_mac` must match your
+remote's MAC. If `ble_model` is `0`, that fan was never paired.
 
-Everything else is identical on both branches.
+> ⚠️ **Do not re-pair the remote** (Power + M). A new bond generates a new key
+> and your saved `ble_key` becomes useless.
+
+### How it works
+
+The remote broadcasts a manufacturer-specific advertisement (company ID
+`0x4D44` = "DM"). A button press carries an 8-byte payload encrypted with
+**single DES in ECB mode**, keyed with `ble_key`. Decrypted it holds the pressed
+button plus the complete target state and a checksum. Frames failing the
+checksum are rejected, so a wrong key or a neighbour's remote can never drive
+your fan.
+
+Full protocol details, including the decrypted byte layout and the evidence
+behind it, are in [PROTOCOL.md](PROTOCOL.md).
 
 ---
 
@@ -136,14 +187,23 @@ After flashing, the ESP32 talks to the fan MCU over an **internal UART already w
 ## File structure
 
 ```
-dm_fan.yaml                    ← ESPHome configuration
-PROTOCOL.md                    ← ESP32 ↔ MCU communication reference
+dm_fan.yaml                    ← ESPHome configuration (UART only)
+remote_control.yaml            ← configuration WITH BLE remote
+PROTOCOL.md                    ← ESP32 ↔ MCU + BLE remote protocol reference
+TODO.md                        ← open work, ordered by priority
 components/
   dm_fan/
     __init__.py                ← Namespace declaration
     fan.py                     ← Python codegen (fan platform)
     dm_fan.h                   ← C++ component (all logic)
+    des.h                      ← single-DES for the remote payload
+docs/
+  esphome-miot-issue50-correction.md   ← correction note for the upstream thread
 ```
+
+The research configs used while reverse engineering (raw payload logging, GATT
+discovery, the 0x1F41 forward experiment) were removed once the protocol was
+solved. They remain in the git history if anyone needs them.
 
 ---
 

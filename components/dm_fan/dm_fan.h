@@ -6,14 +6,19 @@
 #include "esphome/components/fan/fan.h"
 #include "esphome/components/sensor/sensor.h"
 #include "esphome/components/text_sensor/text_sensor.h"
+#ifdef USE_ESP32_BLE_DEVICE
+#include "esphome/components/esp32_ble_tracker/esp32_ble_tracker.h"
+#endif
+#include "des.h"
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <string>
 
 namespace esphome {
 namespace dm_fan {
 
-static const char *const TAG = "dm_fan.v3.1.0";
+static const char *const TAG = "dm_fan.v4.0.0-beta";
 
 // ── Protocol constants ────────────────────────────────────────────────────────
 constexpr uint8_t MAGIC_0   = 0xFA;
@@ -21,6 +26,15 @@ constexpr uint8_t MAGIC_1   = 0xCE;
 constexpr uint8_t CMD_STATE = 0x84;  // MCU→ESP full state push (RX)
 constexpr uint8_t CMD_SET   = 0x04;  // ESP→MCU single-property command (TX)
 constexpr uint8_t CMD_QUERY = 0x02;  // MCU→ESP WiFi status query
+
+// BLE remote beacon — manufacturer-specific advertisement, company ID 0x4D44 ("DM")
+constexpr uint16_t BLE_COMPANY_DM = 0x4D44;  // little-endian "DM" = DreamMaker
+
+// Beacon status byte [9]: idle heartbeat vs. actual button press.
+// Confirmed from captures — commands carry an 8-byte encrypted payload,
+// idle heartbeats carry all zeros.
+constexpr uint8_t BLE_STATUS_IDLE    = 0x01;
+constexpr uint8_t BLE_STATUS_COMMAND = 0x02;
 
 // Fan modes. In Smart mode the fan sets its own speed from temperature and
 // humidity, so speed is MCU-owned there and must not be overwritten.
@@ -158,16 +172,30 @@ struct FanState {
 };
 
 // ── Main component ────────────────────────────────────────────────────────────
-class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
+class DmFan : public fan::Fan, public Component, public uart::UARTDevice
+#ifdef USE_ESP32_BLE_DEVICE
+            , public esp32_ble_tracker::ESPBTDeviceListener
+#endif
+{
  public:
   void set_temperature_sensor(sensor::Sensor *s)          { temperature_ = s; }
   void set_humidity_sensor(sensor::Sensor *s)              { humidity_ = s; }
   void set_mcu_version_sensor(text_sensor::TextSensor *s)  { mcu_version_ = s; }
   void set_log_raw_frames(bool v)                          { log_raw_frames_ = v; }
+  void set_ble_remote(bool v)                              { ble_remote_ = v; }
+  void set_ble_report_to_mcu(bool v)                       { ble_report_to_mcu_ = v; }
+  // 8-byte DES key from the fan's NVS (`ble_key`). Per-device secret — without
+  // it the encrypted remote payload cannot be decoded. Takes std::array so the
+  // code generator can pass a brace-initialised list (same pattern as the API
+  // component's noise PSK).
+  void set_ble_key(std::array<uint8_t, 8> key) {
+    des_.set_key(key.data());
+    ble_key_set_ = true;
+  }
 
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   void setup() override {
-    ESP_LOGI(TAG, "DM Fan v3.1.0 — TX=GPIO17 RX=GPIO16 19200 baud");
+    ESP_LOGI(TAG, "DM Fan v4.0.0-beta — TX=GPIO17 RX=GPIO16 19200 baud");
     this->set_supported_preset_modes({"Direct Breeze", "Natural Breeze", "Smart Breeze"});
     auto restore = this->restore_state_();
     if (restore.has_value()) restore->apply(*this);
@@ -291,6 +319,34 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   bool     get_child_lock()  const { return desired_.child_lock; }
   float    get_timer_hours() const { return desired_.timer_min / 60.0f; }
 
+  // ── BLE remote beacon receiver (Phase 1) ───────────────────────────────────
+  // The DreamMaker remote (and the fan itself in original firmware) advertises a
+  // manufacturer-specific BLE beacon with company ID 0x4D44 ("DM"). Layout of the
+  // manufacturer data AFTER the 2-byte company ID (which esp32_ble_tracker strips
+  // into the ServiceData uuid):
+  //   [0..1]  protocol version (observed 0x02 0x01)
+  //   [2..7]  device MAC (BLE byte order)
+  //   [8]     sequence counter (increments ~every 20 s / on activity)
+  //   [9]     status (0x01 = idle)
+  //   [10..]  payload (8 bytes, all-zero when idle — button data when active)
+  //
+  // This handler only DECODES and LOGS by default. Forwarding to the MCU over
+  // UART (resource 0x1F41) is gated behind set_ble_report_to_mcu() because the
+  // exact frame format is still being reverse-engineered and a malformed report
+  // can make the MCU reset the ESP.
+#ifdef USE_ESP32_BLE_DEVICE
+  bool parse_device(const esp32_ble_tracker::ESPBTDevice &device) override {
+    if (!ble_remote_) return false;
+    const auto dm_uuid = esp32_ble::ESPBTUUID::from_uint16(BLE_COMPANY_DM);
+    for (auto &md : device.get_manufacturer_datas()) {
+      if (!(md.uuid == dm_uuid)) continue;
+      on_dm_beacon_(device, md.data);
+      return true;
+    }
+    return false;
+  }
+#endif
+
  protected:
   FanState desired_;
   FanState hw_state_;
@@ -311,6 +367,19 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   sensor::Sensor *humidity_{nullptr};
   text_sensor::TextSensor *mcu_version_{nullptr};
   bool log_raw_frames_{false};
+
+  // BLE remote beacon state. Payload length varies by sender: the remote
+  // advertises 8 bytes, the fan's own beacon (original firmware) 10.
+  static constexpr size_t BLE_PAYLOAD_MAX = 16;
+  bool    ble_remote_{false};
+  bool    ble_report_to_mcu_{false};
+  des::Des des_;
+  bool    ble_key_set_{false};
+  bool    ble_have_last_{false};
+  uint8_t ble_last_counter_{0};
+  uint8_t ble_last_status_{0};
+  uint8_t ble_last_payload_[BLE_PAYLOAD_MAX]{};
+  size_t  ble_last_payload_len_{0};
 
   static const char *mode_name_(uint8_t m) {
     if (m == 1) return "natural";
@@ -459,6 +528,30 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
   // and scan for the "fan_" ASCII marker to extract mcu_version (e.g. "fan_0001").
   void on_boot_response_() {
     uint16_t res = ((uint16_t)parse_buf_[1] << 8) | parse_buf_[2];
+    if (res == 0x1F41) {
+      // ACK for our BLE→MCU beacon report. CONFIRMED on hardware 2026-08-01:
+      // the MCU parses the frame and answers action:82 res:0x1F41 len=10.
+      //
+      // The ACK body is dumped in full because it is the only channel that can
+      // tell us WHY the fan does not react despite a valid ACK — e.g. a status
+      // byte meaning "payload rejected" vs "accepted". Layout follows the usual
+      // envelope: [cmd, res_hi, res_lo, msg_id 4B, pad, data_len, data...].
+      char hex[3 * 24 + 1];
+      char *p = hex;
+      const uint16_t n = parse_len_ < 24 ? parse_len_ : 24;
+      for (uint16_t i = 0; i < n; i++) p += snprintf(p, 4, "%02X ", parse_buf_[i]);
+      if (p > hex) *(p - 1) = '\0'; else hex[0] = '\0';
+      ESP_LOGI(TAG, "MCU ACKed BLE report (action:82 res:0x1F41, len=%u): %s",
+               parse_len_, hex);
+      if (parse_len_ >= 10) {
+        const uint8_t data_len = parse_buf_[8];
+        ESP_LOGI(TAG, "  → ACK data_len=%u data[0]=0x%02X %s",
+                 (unsigned) data_len, parse_buf_[9],
+                 parse_buf_[9] == 0x01 ? "(0x01 — accepted?)"
+                                       : "(NOT 0x01 — rejected?)");
+      }
+      return;
+    }
     if (res != 0x232A) {
       ESP_LOGD(TAG, "Boot response resource=0x%04X len=%u — ignored", res, parse_len_);
       return;
@@ -653,6 +746,232 @@ class DmFan : public fan::Fan, public Component, public uart::UARTDevice {
              (unsigned) (msg_counter_ - 1));
   }
 
+  // ── BLE beacon → decode + log (+ optional MCU report) ──────────────────────
+#ifdef USE_ESP32_BLE_DEVICE
+  void on_dm_beacon_(const esp32_ble_tracker::ESPBTDevice &device,
+                     const std::vector<uint8_t> &d) {
+    // d = manufacturer data after the 2-byte company ID. Need at least
+    // proto(2) + mac(6) + counter(1) + status(1) = 10 bytes.
+    if (d.size() < 10) {
+      ESP_LOGD(TAG, "DM beacon from %s too short (%u bytes)",
+               device.address_str().c_str(), (unsigned) d.size());
+      return;
+    }
+    uint16_t proto   = ((uint16_t) d[0] << 8) | d[1];
+    uint8_t  counter = d[8];
+    uint8_t  status  = d[9];
+
+    uint8_t payload[BLE_PAYLOAD_MAX] = {};
+    size_t  pn = std::min(BLE_PAYLOAD_MAX, d.size() - 10);
+    for (size_t i = 0; i < pn; i++) payload[i] = d[10 + i];
+
+    char phex[3 * BLE_PAYLOAD_MAX + 1] = {};
+    int  pos = 0;
+    for (size_t i = 0; i < pn; i++)
+      pos += snprintf(phex + pos, sizeof(phex) - pos, "%02X ", payload[i]);
+
+    // Highlight changes — a changed counter/status/payload is the interesting
+    // event (button press), a repeated idle beacon is just the ~20 s heartbeat.
+    bool changed = !ble_have_last_ || counter != ble_last_counter_ ||
+                   status != ble_last_status_ || pn != ble_last_payload_len_ ||
+                   memcmp(payload, ble_last_payload_, pn) != 0;
+
+    if (changed) {
+      ESP_LOGI(TAG,
+        "DM remote beacon %s proto=0x%04X ctr=%u status=0x%02X payload[%u]=[ %s]",
+        device.address_str().c_str(), proto, counter, status, (unsigned) pn, phex);
+    } else {
+      ESP_LOGD(TAG, "DM remote beacon %s (idle heartbeat, ctr=%u)",
+               device.address_str().c_str(), counter);
+    }
+
+    ble_have_last_        = true;
+    ble_last_counter_     = counter;
+    ble_last_status_      = status;
+    ble_last_payload_len_ = pn;
+    memcpy(ble_last_payload_, payload, BLE_PAYLOAD_MAX);
+
+    // Decrypt and act on the button press. This is the real remote path.
+    if (changed && status == BLE_STATUS_COMMAND && pn >= 8)
+      handle_remote_command_(payload);
+
+    // Legacy/experimental: forward the raw beacon to the MCU (resource 0x1F41).
+    // CONFIRMED DEAD END — the MCU ACKs the frame but does nothing, because the
+    // ESP module (not the MCU) was the decrypting side. Kept only for protocol
+    // experiments; the decryption path above is what actually works.
+    if (ble_report_to_mcu_ && changed && status == BLE_STATUS_COMMAND)
+      report_beacon_to_mcu_(counter, payload);
+  }
+#endif
+
+  // ── Remote button press → decrypt → apply ─────────────────────────────────
+  //
+  // The 8-byte advertisement payload is single DES in ECB mode, keyed with the
+  // `ble_key` from the fan's NVS. Decrypted layout (confirmed against 18
+  // captured payloads, checksum valid on all of them):
+  //
+  //   [0] button  0xF1 Timer · 0xF2 Oscillation · 0xF3 Speed
+  //               0xF4 Power · 0xF5 Mode
+  //   [1] power        0/1
+  //   [2] speed        0x01=1 · 0x23=35 · 0x46=70 · 0x64=100
+  //   [3] mode         0 direct · 1 natural · 2 smart
+  //   [4] oscillation  0/1
+  //   [5] roll_angle   always 0x00 from this remote (see note in PROTOCOL.md)
+  //   [6] timer        minutes: 0x00/3C/78/B4/F0 = 0/60/120/180/240
+  //   [7] checksum     sum(byte[0..6]) & 0xFF
+  //
+  // Bytes [1..6] carry the COMPLETE target state, not just the changed field,
+  // so we diff against `desired_` and only send what actually differs.
+  void handle_remote_command_(const uint8_t *payload8) {
+    if (!ble_key_set_) {
+      ESP_LOGW(TAG, "Remote button press received but no ble_key configured — "
+                    "cannot decrypt. Set `ble_key` to enable remote control.");
+      return;
+    }
+
+    uint8_t p[8];
+    des_.decrypt_block(payload8, p);
+
+    uint8_t sum = 0;
+    for (int i = 0; i < 7; i++) sum += p[i];
+    if (sum != p[7]) {
+      // Wrong key, or a beacon from someone else's remote. Either way the
+      // plaintext is meaningless — never act on it.
+      ESP_LOGW(TAG, "Remote payload checksum mismatch (got 0x%02X want 0x%02X) — "
+                    "wrong ble_key or foreign remote; ignoring", p[7], sum);
+      return;
+    }
+
+    // Known button bytes. The DM-FCB01 manual lists four buttons, but the
+    // remote also has an angle button, so an unmapped byte here is expected
+    // rather than an error — flag it so it can be identified.
+    const char *btn;
+    bool known = true;
+    switch (p[0]) {
+      case 0xF1: btn = "Timer";       break;
+      case 0xF2: btn = "Oscillation"; break;
+      case 0xF3: btn = "Speed";       break;
+      case 0xF4: btn = "Power";       break;
+      case 0xF5: btn = "Mode";        break;
+      default:   btn = "unknown"; known = false; break;
+    }
+
+    const bool     power = p[1] != 0;
+    const uint8_t  speed = p[2];
+    const uint8_t  mode  = p[3];
+    const bool     osc   = p[4] != 0;
+    const uint16_t timer = (uint16_t) p[6];
+
+    ESP_LOGI(TAG, "Remote [%s]: power=%d speed=%u mode=%u osc=%d timer=%umin",
+             btn, power, (unsigned) speed, (unsigned) mode, osc,
+             (unsigned) timer);
+
+    // Full plaintext at DEBUG. byte[5] is the roll_angle slot: the payload
+    // mirrors the UART state layout field for field (power, speed, mode,
+    // roll_enable, roll_angle, power_delay), and [5] falls exactly on
+    // roll_angle. It is 0x00 in every capture because this remote can neither
+    // set nor display the angle, so it never learns the value. Deliberately not
+    // applied — writing 0x00 as an angle would be wrong. Logged so a sender
+    // that does populate the field would be noticed.
+    ESP_LOGD(TAG, "  decrypted: %02X %02X %02X %02X %02X %02X %02X %02X",
+             p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7]);
+    if (p[5] != 0x00) {
+      ESP_LOGW(TAG, "  ⚠ byte[5]=0x%02X — roll_angle slot is populated! "
+                    "This remote always sent 0x00. Please report this line.",
+               p[5]);
+    }
+    if (!known) {
+      ESP_LOGW(TAG, "  ⚠ unknown button 0x%02X — please report", p[0]);
+    }
+
+    // Guard the values before they reach the MCU: a corrupted-but-checksum-
+    // valid frame should not push nonsense onto the UART.
+    if (speed < 1 || speed > 100) {
+      ESP_LOGW(TAG, "Remote speed %u out of range — ignoring frame", (unsigned) speed);
+      return;
+    }
+    if (mode > 2) {
+      ESP_LOGW(TAG, "Remote mode %u out of range — ignoring frame", (unsigned) mode);
+      return;
+    }
+    if (timer > 480) {
+      ESP_LOGW(TAG, "Remote timer %u out of range — ignoring frame", (unsigned) timer);
+      return;
+    }
+
+    // Send only what actually changed — one button press otherwise costs five
+    // UART frames, and the MCU echoes each one back as a state push.
+    last_control_time_ = millis();
+    if (power != desired_.power)             { desired_.power = power;
+                                               send_cmd_bool_(RES_POWER, power); }
+    // In Smart mode the fan regulates speed itself from temperature/humidity.
+    // The remote still carries its last manual gear in every payload — pushing
+    // that would fight the fan's own regulation, so leave speed to the MCU.
+    // (`mode` is the NEW mode, so leaving Smart via the remote applies speed
+    // again in the same frame.)
+    if (mode != MODE_SMART && speed != desired_.speed)
+                                             { desired_.speed = speed;
+                                               send_cmd_byte_(RES_SPEED, speed); }
+    if (mode != desired_.mode)               { desired_.mode = mode;
+                                               send_cmd_byte_(RES_MODE, mode); }
+    if (osc != desired_.oscillation)         { desired_.oscillation = osc;
+                                               send_cmd_bool_(RES_OSC_ONOFF, osc); }
+    if (timer != desired_.timer_min)         { desired_.timer_min = timer;
+                                               send_cmd_uint16_(RES_TIMER, timer); }
+
+    // Reflect in HA immediately — same reasoning as in control().
+    this->state       = desired_.power;
+    this->speed       = desired_.speed;
+    this->oscillating = desired_.oscillation;
+    this->set_preset_mode_(preset_name_(desired_.mode));
+    this->publish_state();
+  }
+
+  // ── BLE beacon → MCU report, resource 0x1F41 (EXPERIMENTAL) ───────────────
+  // Forwards the remote's raw 8-byte beacon payload to the MCU. If the MCU is
+  // the side that decrypts the payload (plausible — the original ESP module was
+  // only the radio bridge), this makes the fan react to the remote again with
+  // no need to break the cipher or build a learn table.
+  //
+  // Frame layout now follows the CONFIRMED envelope used by every other
+  // ESP→MCU frame (see build_cmd_header_ / the 0x1F44 pair):
+  //
+  //   FA CE | 00 11 | 02 | 1F 41 | [msg_counter 4B BE] | 00 | 08 | [8B payload] | chk
+  //   └magic┘ └len ┘  cmd  └res─┘                        pad  len
+  //
+  //   len   = 0x11 = 17 payload bytes (cmd 1 + res 2 + counter 4 + pad 1 +
+  //                                    data_len 1 + data 8)
+  //   f[12] = 0x08 — number of bytes that follow, matching the "data_length:8"
+  //           seen in the original firmware log for this resource.
+  //
+  // The PREVIOUS implementation was wrong: it used a single-byte beacon counter
+  // where the envelope expects a 4-byte message counter plus pad/data_len, so
+  // the MCU would have parsed garbage. That likely triggered the
+  // "BLE->mcu report timeout!" path (→ SW_CPU_RESET after 2 failures).
+  //
+  // STILL UNCONFIRMED: whether the MCU expects the beacon's own counter byte
+  // anywhere in the frame. It is currently NOT sent — the payload alone should
+  // carry the target state. Watch for the "MCU ACKed BLE report" INFO line to
+  // confirm the MCU accepts this format.
+  void report_beacon_to_mcu_(uint8_t beacon_ctr, const uint8_t *payload8) {
+    uint8_t f[22];
+    f[0]  = MAGIC_0; f[1] = MAGIC_1;
+    f[2]  = 0x00;    f[3] = 0x11;      // 17 payload bytes
+    f[4]  = 0x02;                       // action:2
+    f[5]  = 0x1F;    f[6] = 0x41;      // resource 0x1F41
+    f[7]  = (msg_counter_ >> 24) & 0xFF;
+    f[8]  = (msg_counter_ >> 16) & 0xFF;
+    f[9]  = (msg_counter_ >>  8) & 0xFF;
+    f[10] = (msg_counter_      ) & 0xFF;
+    msg_counter_++;
+    f[11] = 0x00;                       // reserved/pad
+    f[12] = 0x08;                       // data_length
+    for (int i = 0; i < 8; i++) f[13 + i] = payload8[i];
+    f[21] = checksum_(f, 21);
+    write_array(f, 22);
+    ESP_LOGI(TAG, "BLE→MCU report (0x1F41, beacon ctr=%u, msg ctr=%u) — EXPERIMENTAL",
+             (unsigned) beacon_ctr, (unsigned) (msg_counter_ - 1));
+  }
 };
 
 }  // namespace dm_fan
