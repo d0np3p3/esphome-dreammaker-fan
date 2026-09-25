@@ -251,7 +251,10 @@ Feature ist optional und liegt auf `main`, siehe oben.)
 - [x] **Release `v3.1.0` veröffentlicht (2026-09-25),** Tag auf `b4a67e0`.
       Künftige Releases nur über die GitHub-Oberfläche: Claude-Sessions dürfen
       weder Tags pushen noch Releases anlegen.
-- [ ] Wenn Smart-Modus gegengeprüft: Tag `v4.0.0`
+- [ ] Tag `v4.0.0` (ohne beta) erst, wenn die Fernbedienung aus der Beta ist —
+      also der `ble_key` ohne NVS-Dump vor dem Flashen zu beschaffen ist
+      (`docs/testbench-bind.md`) — und der Smart-Modus gegengeprüft ist. Bis
+      dahin bleibt die Version `4.0.0-beta`, auch auf `main`.
 
 ---
 
